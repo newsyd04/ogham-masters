@@ -1,0 +1,89 @@
+# Ogham Image Scraping Configuration
+# ===================================
+
+general:
+  output_dir: "./ogham_dataset"
+  rate_limit: 2.0  # Seconds between requests
+  max_retries: 3
+  timeout: 30
+  user_agent: "OghamOCR-Research/1.0 (University research project)"
+  respect_robots: true
+
+sources:
+  dias:
+    enabled: true
+    name: "DIAS Ogham in 3D"
+    base_url: "https://ogham.celt.dias.ie/"
+    default_license: "CC-BY-NC-SA"
+    priority: 1  # Most comprehensive structured data
+    rate_limit: 3.0  # Be respectful to academic servers
+    notes: "CC-BY-NC-SA 3.0 Ireland. Contact DIAS for bulk commercial use."
+
+  cisp:
+    enabled: true
+    name: "Celtic Inscribed Stones Project"
+    base_url: "https://www.ucl.ac.uk/archaeology/cisp/"
+    default_license: "ACADEMIC"
+    priority: 2
+
+  wikimedia:
+    enabled: true
+    name: "Wikimedia Commons"
+    base_url: "https://commons.wikimedia.org/"
+    default_license: "CC-BY-SA"
+    priority: 2
+    categories:
+      - "Category:Ogham inscriptions"
+      - "Category:Ogham stones"
+      - "Category:Ogham inscriptions in Ireland"
+      - "Category:Ogham inscriptions in Scotland"
+
+  canmore:
+    enabled: false  # Enable when implementing
+    name: "Canmore (Historic Environment Scotland)"
+    base_url: "https://canmore.org.uk/"
+    default_license: "OGL"
+    priority: 3
+
+# Ethical guidelines
+ethics:
+  # Always respect these
+  respect_robots_txt: true
+  rate_limit_min_seconds: 1.0
+  store_license_metadata: true
+  maintain_provenance: true
+
+  # Contact for bulk use
+  contact_for_bulk: true
+  bulk_threshold: 100  # Contact if downloading more than this
+
+# License categories
+licenses:
+  CC0:
+    commercial: true
+    attribution: false
+    derivatives: true
+  CC-BY:
+    commercial: true
+    attribution: true
+    derivatives: true
+  CC-BY-SA:
+    commercial: true
+    attribution: true
+    derivatives: "sharealike"
+  CC-BY-NC:
+    commercial: false
+    attribution: true
+    derivatives: true
+  CC-BY-NC-SA:
+    commercial: false
+    attribution: true
+    derivatives: "sharealike"
+  OGL:
+    commercial: true
+    attribution: true
+    derivatives: true
+  ACADEMIC:
+    commercial: false
+    attribution: true
+    derivatives: "research_only"

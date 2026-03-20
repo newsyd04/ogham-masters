@@ -1,0 +1,92 @@
+# Ogham OCR Training Configuration
+# ================================
+
+experiment:
+  name: "ogham_ocr_v1"
+  description: "Baseline TrOCR fine-tuning for Ogham inscription recognition"
+  seed: 42
+
+model:
+  # Stage1 checkpoints are pre-trained on synthetic data only — better starting
+  # point than stage2 (which was fine-tuned on English printed/handwritten text).
+  # Options: trocr-base-stage1 (334M params), trocr-small-stage1 (62M params)
+  name: "microsoft/trocr-base-stage1"
+  max_length: 64
+  freeze_encoder_epochs: 5  # Freeze vision encoder for first N epochs
+
+  # Output mode: "ogham" extends tokenizer with Ogham Unicode chars,
+  # "latin" uses existing tokenizer with Latin transliterations
+  output_mode: "ogham"
+
+training:
+  num_epochs: 50
+  batch_size: 16
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  warmup_steps: 500
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+  use_amp: true  # Mixed precision
+
+data:
+  # Real data
+  real_data_dir: "/content/drive/MyDrive/ogham_ocr/datasets/real"
+  confidence_filter:
+    - "verified"
+    - "probable"
+
+  # Synthetic data
+  synthetic_size: 50000
+  font_dir: "/content/drive/MyDrive/ogham_ocr/datasets/fonts"
+
+  # Splits
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  stratify_by: "region"
+
+curriculum:
+  schedule: "default"
+  # Phases:
+  # - Epoch 0-10: 95% synthetic (easy), 5% real
+  # - Epoch 10-20: 85% synthetic (medium), 15% real
+  # - Epoch 20-35: 70% synthetic (medium), 30% real
+  # - Epoch 35-50: 50% synthetic (hard), 50% real
+
+checkpointing:
+  checkpoint_dir: "/content/drive/MyDrive/ogham_ocr/checkpoints"
+  save_every_n_epochs: 5
+  keep_last_n_checkpoints: 3
+
+logging:
+  log_dir: "/content/drive/MyDrive/ogham_ocr/logs"
+  log_every_n_steps: 100
+  eval_every_n_epochs: 1
+  use_wandb: true
+  wandb_project: "ogham-ocr"
+
+early_stopping:
+  patience: 10
+  metric: "val_cer"
+  mode: "min"
+
+preprocessing:
+  # Orientation
+  fix_orientation: true
+  orientation_mode: "rotate_90_cw"
+
+  # Enhancement
+  enhance_contrast: true
+  enhancement_method: "clahe"
+  clahe_clip_limit: 2.0
+
+  # Resizing
+  target_height: 384
+  max_width: 2048
+  min_width: 128
+
+augmentation:
+  # Training augmentation severity progression
+  # Matches curriculum schedule
+  initial_severity: "light"
+  final_severity: "heavy"

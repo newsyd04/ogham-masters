@@ -1,0 +1,16 @@
+{
+  "total_stones": 326,
+  "with_consensus": 167,
+  "with_images": 132,
+  "bootstrapped": 132,
+  "skipped_no_images": 35,
+  "skipped_no_transcription": 159,
+  "skipped_too_short": 0,
+  "by_confidence": {
+    "verified": 132,
+    "probable": 0,
+    "uncertain": 0
+  },
+  "output_file": "ogham_dataset/processed/annotations/transcriptions.json",
+  "timestamp": "2026-03-02T13:24:48.165673+00:00"
+}

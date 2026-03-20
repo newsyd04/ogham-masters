@@ -1,0 +1,11 @@
+{
+  "stones_discovered": 326,
+  "stones_with_images": 134,
+  "images_downloaded": 198,
+  "image_failures": 2,
+  "elapsed_seconds": 2504.2,
+  "output_dir": "./ogham_dataset",
+  "retry_downloaded": 0,
+  "retry_failed": 9,
+  "retry_no_images": 183
+}
