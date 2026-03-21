@@ -22,8 +22,13 @@ log = logging.getLogger(__name__)
 
 # All Ogham characters that need dedicated tokens
 # Ordered by Unicode codepoint for consistency
+#
+# NOTE: U+1680 (Ogham Space Mark) is excluded from this list because it is
+# Unicode category Zs (Space Separator). RoBERTa's pre-tokenizer normalizes
+# all Zs-category characters during whitespace splitting *before* vocabulary
+# lookup, so U+1680 can never be matched as a token — even if added to the
+# vocab. Labels should normalize U+1680 → ASCII space (see normalize_ogham_labels).
 OGHAM_TOKENS: List[str] = [
-    "\u1680",  # Ogham space mark
     "\u1681",  # ᚁ B (beith)
     "\u1682",  # ᚂ L (luis)
     "\u1683",  # ᚃ F/V (fearn)
@@ -61,6 +66,17 @@ ANNOTATION_TOKENS: List[str] = [
     "]",   # End of uncertain/damaged section
     "…",   # Lacuna (missing/illegible section)
 ]
+
+
+def normalize_ogham_labels(text: str) -> str:
+    """
+    Normalize Ogham text for tokenizer compatibility.
+
+    Replaces U+1680 (Ogham Space Mark) with ASCII space, since RoBERTa's
+    pre-tokenizer strips U+1680 as whitespace before token matching.
+    ASCII space is already handled natively by the tokenizer.
+    """
+    return text.replace("\u1680", " ")
 
 
 def extend_tokenizer_with_ogham(
@@ -174,8 +190,8 @@ def resize_model_embeddings(
     # --- Apply non-random initialization to new token embeddings ---
 
     # Ogham → Latin mapping for seeding embeddings
+    # U+1680 excluded — handled via label normalization (see normalize_ogham_labels)
     OGHAM_LATIN_MAP = {
-        "\u1680": " ",    # Ogham space → space
         "\u1681": "B",    # ᚁ
         "\u1682": "L",    # ᚂ
         "\u1683": "F",    # ᚃ

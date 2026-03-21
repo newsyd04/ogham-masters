@@ -162,6 +162,9 @@ class ShardedDataset:
         # Choose target text based on mode
         text = sample["ogham_text"] if self.mode == "ogham" else sample["latin_text"]
 
+        # Normalize U+1680 (Ogham Space Mark) → ASCII space for tokenizer compatibility
+        text = text.replace("\u1680", " ")
+
         labels = self.tokenizer(
             text,
             padding="max_length",
