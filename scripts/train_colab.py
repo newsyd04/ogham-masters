@@ -260,12 +260,14 @@ def compute_cer(predictions: List[str], references: List[str]) -> float:
 def train_one_epoch(model, dataloader, optimizer, device, scaler=None):
     """Train for one epoch."""
     import torch
+    from tqdm import tqdm
 
     model.train()
     total_loss = 0
     num_batches = 0
 
-    for batch in dataloader:
+    pbar = tqdm(dataloader, desc="  Training", leave=False)
+    for batch in pbar:
         pixel_values = batch["pixel_values"].to(device)
         labels = batch["labels"].to(device)
 
@@ -291,6 +293,7 @@ def train_one_epoch(model, dataloader, optimizer, device, scaler=None):
 
         total_loss += loss.item()
         num_batches += 1
+        pbar.set_postfix(loss=f"{total_loss / num_batches:.4f}")
 
     return total_loss / max(num_batches, 1)
 
@@ -298,6 +301,7 @@ def train_one_epoch(model, dataloader, optimizer, device, scaler=None):
 def evaluate(model, dataloader, tokenizer, device):
     """Evaluate model, compute CER and loss."""
     import torch
+    from tqdm import tqdm
 
     model.eval()
     total_loss = 0
@@ -305,7 +309,7 @@ def evaluate(model, dataloader, tokenizer, device):
     all_refs = []
 
     with torch.no_grad():
-        for batch in dataloader:
+        for batch in tqdm(dataloader, desc="  Evaluating", leave=False):
             pixel_values = batch["pixel_values"].to(device)
             labels = batch["labels"].to(device)
 
@@ -449,6 +453,15 @@ def run_training(
         log.info(f"Mixed dataset: {len(train_dataset)} samples with curriculum learning")
 
     # DataLoaders
+    # Warn if using workers with Drive paths (FUSE can deadlock with multiprocessing)
+    is_drive = "/drive/" in data_dir
+    if is_drive and num_workers > 2:
+        log.warning(
+            f"Reducing num_workers from {num_workers} to 2 for Drive compatibility. "
+            f"Use local storage for faster I/O."
+        )
+        num_workers = 2
+
     collator = SimpleCollator()
     pin = device.type == "cuda"
 
@@ -459,6 +472,7 @@ def run_training(
         num_workers=num_workers,
         collate_fn=collator,
         pin_memory=pin,
+        persistent_workers=num_workers > 0,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -467,6 +481,7 @@ def run_training(
         num_workers=num_workers,
         collate_fn=collator,
         pin_memory=pin,
+        persistent_workers=num_workers > 0,
     )
 
     # Optimizer and scheduler
