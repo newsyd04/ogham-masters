@@ -142,14 +142,17 @@ class ShardedDataset:
                     continue
 
                 # Skip truncated files from quota errors (0-byte or tiny stubs)
-                try:
-                    fsize = image_path.stat().st_size
-                except OSError:
-                    skipped += 1
-                    continue
-                if fsize < 500:  # valid JPEGs are at least a few KB
-                    skipped += 1
-                    continue
+                # Only validate on local disk — Drive FUSE stat() is too slow on cold cache
+                is_drive = "/drive/" in str(image_path)
+                if not is_drive:
+                    try:
+                        fsize = image_path.stat().st_size
+                    except OSError:
+                        skipped += 1
+                        continue
+                    if fsize < 500:
+                        skipped += 1
+                        continue
 
                 rows.append({
                     "image_path": str(image_path),
