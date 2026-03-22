@@ -141,11 +141,13 @@ class ShardedDataset:
                 if not image_path.exists():
                     continue
 
-                # Validate image is readable (catches truncated files from quota errors)
+                # Skip truncated files from quota errors (0-byte or tiny stubs)
                 try:
-                    img = self.PILImage.open(str(image_path))
-                    img.verify()  # checks header without loading full image
-                except Exception:
+                    fsize = image_path.stat().st_size
+                except OSError:
+                    skipped += 1
+                    continue
+                if fsize < 500:  # valid JPEGs are at least a few KB
                     skipped += 1
                     continue
 
