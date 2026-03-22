@@ -128,8 +128,9 @@ class ShardedDataset:
         return rows
 
     def _load_csv(self, csv_path: Path, base_dir: Path) -> List[Dict]:
-        """Load a single CSV and resolve image paths."""
+        """Load a single CSV and resolve image paths, filtering corrupt images."""
         rows = []
+        skipped = 0
         with open(csv_path) as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -140,12 +141,23 @@ class ShardedDataset:
                 if not image_path.exists():
                     continue
 
+                # Validate image is readable (catches truncated files from quota errors)
+                try:
+                    img = self.PILImage.open(str(image_path))
+                    img.verify()  # checks header without loading full image
+                except Exception:
+                    skipped += 1
+                    continue
+
                 rows.append({
                     "image_path": str(image_path),
                     "ogham_text": row["ogham_text"],
                     "latin_text": row["latin_transliteration"],
                     "difficulty": row.get("difficulty", "unknown"),
                 })
+
+        if skipped:
+            log.warning(f"Skipped {skipped} corrupt images in {csv_path.parent.name}")
         return rows
 
     def __len__(self):
@@ -154,7 +166,13 @@ class ShardedDataset:
     def __getitem__(self, idx):
         sample = self.samples[idx]
 
-        image = self.PILImage.open(sample["image_path"]).convert("RGB")
+        try:
+            image = self.PILImage.open(sample["image_path"]).convert("RGB")
+        except Exception:
+            # Fallback: return a random valid sample instead of crashing
+            fallback_idx = (idx + 1) % len(self.samples)
+            return self.__getitem__(fallback_idx)
+
         pixel_values = self.processor(
             images=image, return_tensors="pt"
         ).pixel_values.squeeze(0)
