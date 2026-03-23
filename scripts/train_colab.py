@@ -210,6 +210,79 @@ class ShardedDataset:
 
 
 # =============================================================================
+# Dataset: loads from Hugging Face Hub (fast local cache, no Drive FUSE)
+# =============================================================================
+
+class HFDataset:
+    """
+    PyTorch Dataset loading from Hugging Face Hub.
+
+    Downloads to Colab local disk on first load (~5 min), then reads from
+    fast local cache. No Drive FUSE overhead on subsequent epochs.
+    """
+
+    def __init__(
+        self,
+        dataset_name: str,
+        processor: Any,
+        tokenizer: Any,
+        mode: str = "ogham",
+        max_length: int = 64,
+        split: str = "train",
+    ):
+        import torch
+        from datasets import load_dataset
+
+        self.processor = processor
+        self.tokenizer = tokenizer
+        self.mode = mode
+        self.max_length = max_length
+        self.torch = torch
+
+        log.info(f"Loading HF dataset: {dataset_name} (split={split})")
+        self.ds = load_dataset(dataset_name, split=split)
+        log.info(f"Loaded {len(self.ds)} samples from HF Hub")
+
+    def __len__(self):
+        return len(self.ds)
+
+    def __getitem__(self, idx):
+        sample = self.ds[idx]
+
+        try:
+            image = sample["image"].convert("RGB")
+        except Exception:
+            fallback_idx = (idx + 1) % len(self.ds)
+            return self.__getitem__(fallback_idx)
+
+        pixel_values = self.processor(
+            images=image, return_tensors="pt"
+        ).pixel_values.squeeze(0)
+
+        text = sample["ogham_text"] if self.mode == "ogham" else sample["latin_transliteration"]
+        text = text.replace("\u1680", " ")
+
+        labels = self.tokenizer(
+            text,
+            padding="max_length",
+            max_length=self.max_length,
+            truncation=True,
+            return_tensors="pt",
+        ).input_ids.squeeze(0)
+
+        pad_id = self.tokenizer.pad_token_id
+        labels = labels.clone()
+        labels[labels == pad_id] = -100
+
+        return {
+            "pixel_values": pixel_values,
+            "labels": labels,
+            "text": text,
+            "is_synthetic": True,
+        }
+
+
+# =============================================================================
 # Collator
 # =============================================================================
 
@@ -380,6 +453,7 @@ def run_training(
     resume: bool,
     device_str: str,
     num_workers: int,
+    hf_dataset: Optional[str] = None,
 ) -> Dict:
     """Run a complete training session."""
     import torch
@@ -408,36 +482,52 @@ def run_training(
         log.info(f"Resuming from checkpoint: {best_ckpt}")
         model = VisionEncoderDecoderModel.from_pretrained(str(best_ckpt)).to(device)
 
-    # Create training dataset
-    log.info(f"Loading training data from {data_dir}")
-    train_dataset = ShardedDataset(
-        data_dir=data_dir,
-        processor=processor,
-        tokenizer=tokenizer,
-        mode=mode,
-        split="train",
-    )
-
-    # Create validation dataset
-    if val_data_dir and Path(val_data_dir).exists():
-        log.info(f"Loading validation data from {val_data_dir}")
-        val_dataset = ShardedDataset(
-            data_dir=val_data_dir,
+    # Create datasets (HF Hub or file-based)
+    if hf_dataset:
+        log.info(f"Loading from HF Hub: {hf_dataset}")
+        train_dataset = HFDataset(
+            dataset_name=hf_dataset,
             processor=processor,
             tokenizer=tokenizer,
             mode=mode,
-            split="val",
-            val_ratio=1.0,  # Use all as validation
+            split="train",
+        )
+        val_dataset = HFDataset(
+            dataset_name=hf_dataset,
+            processor=processor,
+            tokenizer=tokenizer,
+            mode=mode,
+            split="validation",
         )
     else:
-        log.info("Using 10% of training data as validation")
-        val_dataset = ShardedDataset(
+        log.info(f"Loading training data from {data_dir}")
+        train_dataset = ShardedDataset(
             data_dir=data_dir,
             processor=processor,
             tokenizer=tokenizer,
             mode=mode,
-            split="val",
+            split="train",
         )
+
+        if val_data_dir and Path(val_data_dir).exists():
+            log.info(f"Loading validation data from {val_data_dir}")
+            val_dataset = ShardedDataset(
+                data_dir=val_data_dir,
+                processor=processor,
+                tokenizer=tokenizer,
+                mode=mode,
+                split="val",
+                val_ratio=1.0,  # Use all as validation
+            )
+        else:
+            log.info("Using 10% of training data as validation")
+            val_dataset = ShardedDataset(
+                data_dir=data_dir,
+                processor=processor,
+                tokenizer=tokenizer,
+                mode=mode,
+                split="val",
+            )
 
     log.info(f"Train: {len(train_dataset)} samples, Val: {len(val_dataset)} samples")
 
@@ -477,8 +567,8 @@ def run_training(
 
     # DataLoaders
     # Warn if using workers with Drive paths (FUSE can deadlock with multiprocessing)
-    is_drive = "/drive/" in data_dir
-    if is_drive and num_workers > 2:
+    is_drive = data_dir and "/drive/" in data_dir
+    if is_drive and not hf_dataset and num_workers > 2:
         log.warning(
             f"Reducing num_workers from {num_workers} to 2 for Drive compatibility. "
             f"Use local storage for faster I/O."
@@ -607,8 +697,10 @@ def main():
                         help="Phase 1=synthetic-only, Phase 2=curriculum with real data")
 
     # Data
-    parser.add_argument("--data-dir", type=str, required=True,
+    parser.add_argument("--data-dir", type=str, default=None,
                         help="Path to synthetic training data (single dir or sharded)")
+    parser.add_argument("--hf-dataset", type=str, default=None,
+                        help="HF Hub dataset name (e.g. username/ogham-synthetic-200k)")
     parser.add_argument("--val-data-dir", type=str, default=None,
                         help="Path to pre-generated validation data")
     parser.add_argument("--real-data-dir", type=str, default=None,
@@ -643,6 +735,10 @@ def main():
     }
     model_name = model_map[args.model_size]
 
+    # Validate data source
+    if not args.hf_dataset and not args.data_dir:
+        parser.error("Either --data-dir or --hf-dataset is required")
+
     if args.mode == "compare":
         log.info("Running comparison: ogham vs latin\n")
         results = {}
@@ -669,6 +765,7 @@ def main():
                 resume=args.resume,
                 device_str=args.device,
                 num_workers=args.num_workers,
+                hf_dataset=args.hf_dataset,
             )
 
         # Print comparison
@@ -704,6 +801,7 @@ def main():
             resume=args.resume,
             device_str=args.device,
             num_workers=args.num_workers,
+            hf_dataset=args.hf_dataset,
         )
 
 
