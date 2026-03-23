@@ -143,7 +143,7 @@ def main():
 
     log.info(f"Uploading to {args.repo_name} (private={args.private})...")
     log.info("This may take 30-60 minutes for 185k images. Progress will show below.")
-    ds.push_to_hub(args.repo_name, private=args.private)
+    ds.push_to_hub(args.repo_name, private=args.private, token=True)
 
     log.info(f"Done! Dataset available at: https://huggingface.co/datasets/{args.repo_name}")
     log.info(f"\nTo use in training:")

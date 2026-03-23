@@ -240,7 +240,7 @@ class HFDataset:
         self.torch = torch
 
         log.info(f"Loading HF dataset: {dataset_name} (split={split})")
-        self.ds = load_dataset(dataset_name, split=split)
+        self.ds = load_dataset(dataset_name, split=split, token=True)
         log.info(f"Loaded {len(self.ds)} samples from HF Hub")
 
     def __len__(self):
