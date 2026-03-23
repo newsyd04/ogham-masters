@@ -604,9 +604,17 @@ def run_training(
     # AMP scaler (CUDA only)
     scaler = torch.amp.GradScaler("cuda") if device.type == "cuda" else None
 
-    # Training loop
+    # Training loop — load existing history on resume so we don't lose prior epochs
+    history_path = checkpoint_path / f"history_{mode}.json"
     history = {"train_loss": [], "val_loss": [], "val_cer": [], "val_exact_match": []}
-    best_cer = float("inf")
+    if resume and history_path.exists():
+        try:
+            with open(history_path) as f:
+                history = json.load(f)
+            log.info(f"Loaded history: {len(history['train_loss'])} prior epochs")
+        except (json.JSONDecodeError, KeyError):
+            log.warning("Could not load prior history, starting fresh")
+    best_cer = min(history["val_cer"]) if history["val_cer"] else float("inf")
 
     log.info(f"\n{'='*60}")
     log.info(f"Training: {mode} mode, {epochs} epochs, batch {batch_size}, lr {lr}")
@@ -653,6 +661,10 @@ def run_training(
             f"Exact: {val_metrics['exact_match']:.1%}"
         )
 
+        # Save history after every epoch (survives disconnects)
+        with open(history_path, "w") as f:
+            json.dump(history, f, indent=2)
+
         # Save best checkpoint
         if val_metrics["cer"] < best_cer:
             best_cer = val_metrics["cer"]
@@ -665,11 +677,6 @@ def run_training(
     final_path = checkpoint_path / f"final_{mode}"
     model.save_pretrained(str(final_path))
     tokenizer.save_pretrained(str(final_path))
-
-    # Save history
-    history_path = checkpoint_path / f"history_{mode}.json"
-    with open(history_path, "w") as f:
-        json.dump(history, f, indent=2)
 
     log.info(f"\nTraining complete. Best CER: {best_cer:.4f}")
     log.info(f"  Best checkpoint: {checkpoint_path / f'best_{mode}'}")
