@@ -295,10 +295,10 @@ class SimpleCollator:
             "pixel_values": torch.stack([b["pixel_values"] for b in batch]),
             "labels": torch.stack([b["labels"] for b in batch]),
         }
-        if "text" in batch[0]:
-            result["texts"] = [b["text"] for b in batch]
-        if "is_synthetic" in batch[0]:
-            result["is_synthetic"] = [b["is_synthetic"] for b in batch]
+        if any("text" in b for b in batch):
+            result["texts"] = [b.get("text", "") for b in batch]
+        if any("is_synthetic" in b for b in batch):
+            result["is_synthetic"] = [b.get("is_synthetic", None) for b in batch]
         return result
 
 
