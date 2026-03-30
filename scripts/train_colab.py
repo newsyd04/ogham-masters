@@ -728,6 +728,8 @@ def main():
     # Infrastructure
     parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints",
                         help="Directory for saving checkpoints")
+    parser.add_argument("--experiment", type=str, default=None,
+                        help="Experiment name suffix for checkpoint isolation (e.g. 'no_freeze')")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from best checkpoint if available")
     parser.add_argument("--device", type=str, default="auto",
@@ -741,6 +743,11 @@ def main():
         "base": "microsoft/trocr-base-stage1",
     }
     model_name = model_map[args.model_size]
+
+    # Apply experiment suffix to checkpoint dir
+    if args.experiment:
+        args.checkpoint_dir = str(Path(args.checkpoint_dir) / args.experiment)
+        log.info(f"Experiment: {args.experiment} -> checkpoints at {args.checkpoint_dir}")
 
     # Validate data source
     if not args.hf_dataset and not args.data_dir:
