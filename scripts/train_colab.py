@@ -645,12 +645,11 @@ def run_training(
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
-    # AMP scaler (CUDA only)
-    # Disable AMP for base models (meta-device tensor incompatibility with autocast)
-    use_amp = device.type == "cuda" and "base" not in model_name
+    # AMP scaler (CUDA only) — safe now that meta-device tensors are fixed
+    use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda") if use_amp else None
-    if not use_amp and device.type == "cuda":
-        log.info("AMP disabled for base model (meta-device compatibility)")
+    if use_amp:
+        log.info("AMP enabled (mixed precision)")
 
     # Training loop — load existing history on resume so we don't lose prior epochs
     history_path = checkpoint_path / f"history_{mode}.json"
