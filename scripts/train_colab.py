@@ -46,14 +46,17 @@ import numpy as np
 
 # === Completely disable torch.dynamo/compile ===
 # torch._dynamo intercepts forward passes with FakeTensor tracing (meta device).
-# Even with suppress_errors=True, crashes occur inside dynamo's dispatch path
-# (fake_impl.py:meta_kernel) when accelerate's meta-device init leaves tensors
-# unresolved. We don't need torch.compile for fine-tuning, so kill it entirely.
+# Even with suppress_errors=True and @disable decorators, the dispatch path
+# routes tensor ops through fake_impl.py:meta_kernel. The only reliable way
+# to kill it is via the environment variable BEFORE torch import, plus every
+# config knob available.
+os.environ["TORCHDYNAMO_DISABLE"] = "1"  # must be set before torch import
+import torch
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
 torch._dynamo.reset()
 try:
-    torch._dynamo.config.disable = True  # PyTorch 2.4+
+    torch._dynamo.config.disable = True
 except AttributeError:
     pass
 
@@ -486,39 +489,31 @@ def run_training(
     model, processor, tokenizer = setup_model(mode, model_name, init_strategy)
     model = model.to(device)
 
-    # Safety net: verify no meta tensors survived loading + .to(device)
-    meta_tensors = [(n, p.device) for n, p in model.named_parameters()
-                    if p.device.type == "meta"]
-    meta_buffers = [(n, b.device) for n, b in model.named_buffers()
-                    if b.device.type == "meta"]
-    if meta_tensors or meta_buffers:
-        log.error(f"META TENSORS after .to({device}): params={meta_tensors}, bufs={meta_buffers}")
-        log.error("Attempting emergency re-materialization on target device...")
-        import torch
-        for name, _ in meta_tensors:
-            parts = name.split(".")
-            parent = model
-            for p in parts[:-1]:
-                parent = getattr(parent, p)
-            old = parent._parameters[parts[-1]]
-            real = torch.nn.Parameter(
-                torch.empty(old.shape, dtype=old.dtype, device=device),
-                requires_grad=old.requires_grad,
-            )
-            torch.nn.init.normal_(real, std=0.02)
-            parent._parameters[parts[-1]] = real
-        for name, _ in meta_buffers:
-            parts = name.split(".")
-            parent = model
-            for p in parts[:-1]:
-                parent = getattr(parent, p)
-            old = parent._buffers[parts[-1]]
-            parent._buffers[parts[-1]] = torch.zeros(
-                old.shape, dtype=old.dtype, device=device
-            )
-        log.warning("Emergency materialization complete")
+    # Safety net: scan ALL tensor attributes (params, buffers, AND plain attrs)
+    # model.to(device) only moves params/buffers. Plain tensor attributes like
+    # _float_tensor are invisible to .to() and stay on meta after init.
+    import torch as _torch
+    meta_found = []
+    for mod_name, mod in model.named_modules():
+        for attr_name in list(vars(mod).keys()):
+            obj = getattr(mod, attr_name, None)
+            if isinstance(obj, _torch.Tensor) and obj.device.type == "meta":
+                full_name = f"{mod_name}.{attr_name}" if mod_name else attr_name
+                meta_found.append(full_name)
+                # Replace with real tensor on target device
+                if isinstance(obj, _torch.nn.Parameter):
+                    real = _torch.nn.Parameter(
+                        _torch.empty(obj.shape, dtype=obj.dtype, device=device),
+                        requires_grad=obj.requires_grad,
+                    )
+                    _torch.nn.init.normal_(real, std=0.02)
+                else:
+                    real = _torch.zeros(obj.shape, dtype=obj.dtype, device=device)
+                setattr(mod, attr_name, real)
+    if meta_found:
+        log.warning(f"Fixed {len(meta_found)} meta tensors (incl. plain attrs): {meta_found}")
     else:
-        log.info("All parameters and buffers on correct device")
+        log.info("All tensors (params, buffers, attrs) on correct device")
 
     # Load checkpoint if resuming
     start_epoch = 0
