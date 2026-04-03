@@ -395,10 +395,12 @@ def setup_ogham_model_and_tokenizer(
     log.info(f"Loading model: {model_name}")
 
     # Load model and processor
+    # low_cpu_mem_usage=False prevents accelerate from using meta-device init
     import torch
-    model = VisionEncoderDecoderModel.from_pretrained(model_name)
-    # Materialize any tensors left on 'meta' device by lazy loading,
-    # BEFORE .to("cpu") which silently skips meta tensors in PyTorch 2.x
+    model = VisionEncoderDecoderModel.from_pretrained(
+        model_name, low_cpu_mem_usage=False
+    )
+    # Safety net: materialize any tensors left on 'meta' device
     _force_materialize_meta_tensors(model, device="cpu")
     model = model.to("cpu")
     processor = TrOCRProcessor.from_pretrained(model_name)
@@ -468,7 +470,9 @@ def setup_transliteration_model(
     log.info(f"Loading model for transliteration: {model_name}")
 
     import torch
-    model = VisionEncoderDecoderModel.from_pretrained(model_name)
+    model = VisionEncoderDecoderModel.from_pretrained(
+        model_name, low_cpu_mem_usage=False
+    )
     _force_materialize_meta_tensors(model, device="cpu")
     model = model.to("cpu")
     processor = TrOCRProcessor.from_pretrained(model_name)

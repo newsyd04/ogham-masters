@@ -44,7 +44,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch._dynamo
+# suppress_errors alone doesn't prevent crashes inside dynamo's FakeTensor
+# dispatch path — disable dynamo entirely since we don't need torch.compile
+# for fine-tuning, and it interferes with meta-device tensor handling
 torch._dynamo.config.suppress_errors = True
+torch._dynamo.reset()
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -355,6 +359,7 @@ def compute_cer(predictions: List[str], references: List[str]) -> float:
     return total_dist / total_chars if total_chars > 0 else 0.0
 
 
+@torch._dynamo.disable(recursive=True)
 def train_one_epoch(model, dataloader, optimizer, device, scaler=None):
     """Train for one epoch."""
     import torch
@@ -396,6 +401,7 @@ def train_one_epoch(model, dataloader, optimizer, device, scaler=None):
     return total_loss / max(num_batches, 1)
 
 
+@torch._dynamo.disable(recursive=True)
 def evaluate(model, dataloader, tokenizer, device):
     """Evaluate model, compute CER and loss."""
     import torch
