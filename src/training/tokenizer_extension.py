@@ -346,7 +346,10 @@ def setup_ogham_model_and_tokenizer(
     log.info(f"Loading model: {model_name}")
 
     # Load model and processor
+    # Force all tensors to CPU (avoids meta-device issues with safetensors lazy loading)
+    import torch
     model = VisionEncoderDecoderModel.from_pretrained(model_name)
+    model = model.to("cpu")
     processor = TrOCRProcessor.from_pretrained(model_name)
 
     # Extend tokenizer with Ogham characters
@@ -413,7 +416,9 @@ def setup_transliteration_model(
 
     log.info(f"Loading model for transliteration: {model_name}")
 
+    import torch
     model = VisionEncoderDecoderModel.from_pretrained(model_name)
+    model = model.to("cpu")
     processor = TrOCRProcessor.from_pretrained(model_name)
     tokenizer = processor.tokenizer
 
