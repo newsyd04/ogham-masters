@@ -473,6 +473,15 @@ def run_training(
     model, processor, tokenizer = setup_model(mode, model_name, init_strategy)
     model = model.to(device)
 
+    # Diagnostic: find any tensors still on meta device
+    meta_params = [(n, p.shape) for n, p in model.named_parameters() if p.device.type == "meta"]
+    meta_bufs = [(n, b.shape) for n, b in model.named_buffers() if b.device.type == "meta"]
+    if meta_params or meta_bufs:
+        log.warning(f"META-DEVICE params: {meta_params}")
+        log.warning(f"META-DEVICE buffers: {meta_bufs}")
+    else:
+        log.info("All parameters and buffers on correct device")
+
     # Load checkpoint if resuming
     start_epoch = 0
     checkpoint_path = Path(checkpoint_dir)
@@ -604,7 +613,11 @@ def run_training(
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
     # AMP scaler (CUDA only)
-    scaler = torch.amp.GradScaler("cuda") if device.type == "cuda" else None
+    # Disable AMP for base models (meta-device tensor incompatibility with autocast)
+    use_amp = device.type == "cuda" and "base" not in model_name
+    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+    if not use_amp and device.type == "cuda":
+        log.info("AMP disabled for base model (meta-device compatibility)")
 
     # Training loop — load existing history on resume so we don't lose prior epochs
     history_path = checkpoint_path / f"history_{mode}.json"
