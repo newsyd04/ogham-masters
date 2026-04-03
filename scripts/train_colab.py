@@ -43,12 +43,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+# === Completely disable torch.dynamo/compile ===
+# torch._dynamo intercepts forward passes with FakeTensor tracing (meta device).
+# Even with suppress_errors=True, crashes occur inside dynamo's dispatch path
+# (fake_impl.py:meta_kernel) when accelerate's meta-device init leaves tensors
+# unresolved. We don't need torch.compile for fine-tuning, so kill it entirely.
 import torch._dynamo
-# suppress_errors alone doesn't prevent crashes inside dynamo's FakeTensor
-# dispatch path — disable dynamo entirely since we don't need torch.compile
-# for fine-tuning, and it interferes with meta-device tensor handling
 torch._dynamo.config.suppress_errors = True
 torch._dynamo.reset()
+try:
+    torch._dynamo.config.disable = True  # PyTorch 2.4+
+except AttributeError:
+    pass
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -479,13 +486,37 @@ def run_training(
     model, processor, tokenizer = setup_model(mode, model_name, init_strategy)
     model = model.to(device)
 
-    # Safety net: force-materialize any tensors still on meta device.
-    # PyTorch 2.x's .to() silently skips meta tensors, so they can survive
-    # both the setup function and the .to(device) call above.
-    from src.training.tokenizer_extension import _force_materialize_meta_tensors
-    n_fixed = _force_materialize_meta_tensors(model, device=str(device))
-    if n_fixed:
-        log.warning(f"Fixed {n_fixed} meta tensors that survived .to({device})")
+    # Safety net: verify no meta tensors survived loading + .to(device)
+    meta_tensors = [(n, p.device) for n, p in model.named_parameters()
+                    if p.device.type == "meta"]
+    meta_buffers = [(n, b.device) for n, b in model.named_buffers()
+                    if b.device.type == "meta"]
+    if meta_tensors or meta_buffers:
+        log.error(f"META TENSORS after .to({device}): params={meta_tensors}, bufs={meta_buffers}")
+        log.error("Attempting emergency re-materialization on target device...")
+        import torch
+        for name, _ in meta_tensors:
+            parts = name.split(".")
+            parent = model
+            for p in parts[:-1]:
+                parent = getattr(parent, p)
+            old = parent._parameters[parts[-1]]
+            real = torch.nn.Parameter(
+                torch.empty(old.shape, dtype=old.dtype, device=device),
+                requires_grad=old.requires_grad,
+            )
+            torch.nn.init.normal_(real, std=0.02)
+            parent._parameters[parts[-1]] = real
+        for name, _ in meta_buffers:
+            parts = name.split(".")
+            parent = model
+            for p in parts[:-1]:
+                parent = getattr(parent, p)
+            old = parent._buffers[parts[-1]]
+            parent._buffers[parts[-1]] = torch.zeros(
+                old.shape, dtype=old.dtype, device=device
+            )
+        log.warning("Emergency materialization complete")
     else:
         log.info("All parameters and buffers on correct device")
 

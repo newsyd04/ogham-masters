@@ -68,22 +68,72 @@ ANNOTATION_TOKENS: List[str] = [
 ]
 
 
-def _force_materialize_meta_tensors(model: Any, device: str = "cpu") -> int:
+def _load_model_no_meta(model_cls: Any, model_name: str) -> Any:
     """
-    Replace any tensors stuck on the 'meta' device with real tensors.
+    Load a HuggingFace model ensuring NO tensors remain on the meta device.
 
-    PyTorch 2.x's model.to(device) silently skips meta tensors — they have
-    no storage, so .to() returns them unchanged without error. This function
-    bypasses .to() entirely: it creates fresh tensors on the target device
-    and writes them directly into the module's _parameters/_buffers dicts.
+    Tries multiple strategies in order of preference:
+    1. from_pretrained with low_cpu_mem_usage=False (avoids accelerate meta init)
+    2. If meta tensors still found, re-load the state dict from hub onto CPU
+    3. Last resort: initialize remaining meta tensors with random values
 
-    Parameters get normal_(std=0.02) init; buffers get zeros.
-    Returns the number of tensors materialized.
+    Returns the model with all tensors on CPU.
     """
     import torch
 
-    materialized = []
+    # Strategy 1: load without lazy/meta device init
+    model = model_cls.from_pretrained(model_name, low_cpu_mem_usage=False)
 
+    # Check for meta tensors
+    meta_names = [n for n, p in model.named_parameters() if p.device.type == "meta"]
+    meta_bufs = [n for n, b in model.named_buffers() if b.device.type == "meta"]
+
+    if not meta_names and not meta_bufs:
+        log.info("Model loaded cleanly — no meta tensors")
+        return model
+
+    log.warning(
+        f"Found {len(meta_names)} meta params + {len(meta_bufs)} meta buffers "
+        f"after from_pretrained. Attempting state_dict reload..."
+    )
+
+    # Strategy 2: re-download weights and load them directly on CPU
+    try:
+        from huggingface_hub import hf_hub_download
+        import safetensors.torch
+        import os
+
+        # Try safetensors first (faster, memory-mapped), then pytorch bin
+        for filename in ["model.safetensors", "pytorch_model.bin"]:
+            try:
+                path = hf_hub_download(model_name, filename)
+                if filename.endswith(".safetensors"):
+                    real_sd = safetensors.torch.load_file(path, device="cpu")
+                else:
+                    real_sd = torch.load(path, map_location="cpu", weights_only=True)
+
+                # Load into model (strict=False in case of key mismatches)
+                missing, unexpected = model.load_state_dict(real_sd, strict=False)
+                if missing:
+                    log.warning(f"Keys missing after state_dict reload: {missing}")
+
+                # Re-check
+                still_meta = [n for n, p in model.named_parameters()
+                              if p.device.type == "meta"]
+                if not still_meta:
+                    log.info("State dict reload fixed all meta tensors")
+                    return model
+                else:
+                    log.warning(f"Still meta after reload: {still_meta}")
+                break
+            except Exception as e:
+                log.debug(f"Could not load {filename}: {e}")
+                continue
+    except ImportError:
+        log.warning("huggingface_hub not available for state_dict reload")
+
+    # Strategy 3: last resort — materialize with random init
+    materialized = []
     for name, param in list(model.named_parameters()):
         if param.device.type == "meta":
             parts = name.split(".")
@@ -91,7 +141,7 @@ def _force_materialize_meta_tensors(model: Any, device: str = "cpu") -> int:
             for p in parts[:-1]:
                 parent = getattr(parent, p)
             real = torch.nn.Parameter(
-                torch.empty(param.shape, dtype=param.dtype, device=device),
+                torch.empty(param.shape, dtype=param.dtype, device="cpu"),
                 requires_grad=param.requires_grad,
             )
             torch.nn.init.normal_(real, std=0.02)
@@ -104,17 +154,17 @@ def _force_materialize_meta_tensors(model: Any, device: str = "cpu") -> int:
             parent = model
             for p in parts[:-1]:
                 parent = getattr(parent, p)
-            real = torch.zeros(buf.shape, dtype=buf.dtype, device=device)
+            real = torch.zeros(buf.shape, dtype=buf.dtype, device="cpu")
             parent._buffers[parts[-1]] = real
             materialized.append(name)
 
     if materialized:
         log.warning(
-            f"Force-materialized {len(materialized)} meta tensors on {device}: "
-            f"{materialized}"
+            f"Last-resort materialized {len(materialized)} meta tensors "
+            f"(random init — pretrained weights lost for these): {materialized}"
         )
 
-    return len(materialized)
+    return model
 
 
 def normalize_ogham_labels(text: str) -> str:
@@ -394,15 +444,8 @@ def setup_ogham_model_and_tokenizer(
 
     log.info(f"Loading model: {model_name}")
 
-    # Load model and processor
-    # low_cpu_mem_usage=False prevents accelerate from using meta-device init
     import torch
-    model = VisionEncoderDecoderModel.from_pretrained(
-        model_name, low_cpu_mem_usage=False
-    )
-    # Safety net: materialize any tensors left on 'meta' device
-    _force_materialize_meta_tensors(model, device="cpu")
-    model = model.to("cpu")
+    model = _load_model_no_meta(VisionEncoderDecoderModel, model_name)
     processor = TrOCRProcessor.from_pretrained(model_name)
 
     # Extend tokenizer with Ogham characters
@@ -470,11 +513,7 @@ def setup_transliteration_model(
     log.info(f"Loading model for transliteration: {model_name}")
 
     import torch
-    model = VisionEncoderDecoderModel.from_pretrained(
-        model_name, low_cpu_mem_usage=False
-    )
-    _force_materialize_meta_tensors(model, device="cpu")
-    model = model.to("cpu")
+    model = _load_model_no_meta(VisionEncoderDecoderModel, model_name)
     processor = TrOCRProcessor.from_pretrained(model_name)
     tokenizer = processor.tokenizer
 
