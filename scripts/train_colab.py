@@ -43,6 +43,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -470,17 +472,6 @@ def run_training(
     log.info(f"Setting up model: {model_name} (mode: {mode})")
     model, processor, tokenizer = setup_model(mode, model_name, init_strategy)
     model = model.to(device)
-
-    # Fix meta-device buffers (TrOCR-base embed_positions._float_tensor)
-    for name, buf in list(model.named_buffers()):
-        if buf.device.type == "meta":
-            module = model
-            parts = name.split(".")
-            for part in parts[:-1]:
-                module = getattr(module, part)
-            new_buf = torch.empty(buf.shape, dtype=buf.dtype, device=device)
-            module.register_buffer(parts[-1], new_buf)
-            log.info(f"Fixed meta-device buffer: {name} -> {device}")
 
     # Load checkpoint if resuming
     start_epoch = 0
