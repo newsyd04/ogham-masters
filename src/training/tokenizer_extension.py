@@ -68,6 +68,55 @@ ANNOTATION_TOKENS: List[str] = [
 ]
 
 
+def _force_materialize_meta_tensors(model: Any, device: str = "cpu") -> int:
+    """
+    Replace any tensors stuck on the 'meta' device with real tensors.
+
+    PyTorch 2.x's model.to(device) silently skips meta tensors — they have
+    no storage, so .to() returns them unchanged without error. This function
+    bypasses .to() entirely: it creates fresh tensors on the target device
+    and writes them directly into the module's _parameters/_buffers dicts.
+
+    Parameters get normal_(std=0.02) init; buffers get zeros.
+    Returns the number of tensors materialized.
+    """
+    import torch
+
+    materialized = []
+
+    for name, param in list(model.named_parameters()):
+        if param.device.type == "meta":
+            parts = name.split(".")
+            parent = model
+            for p in parts[:-1]:
+                parent = getattr(parent, p)
+            real = torch.nn.Parameter(
+                torch.empty(param.shape, dtype=param.dtype, device=device),
+                requires_grad=param.requires_grad,
+            )
+            torch.nn.init.normal_(real, std=0.02)
+            parent._parameters[parts[-1]] = real
+            materialized.append(name)
+
+    for name, buf in list(model.named_buffers()):
+        if buf.device.type == "meta":
+            parts = name.split(".")
+            parent = model
+            for p in parts[:-1]:
+                parent = getattr(parent, p)
+            real = torch.zeros(buf.shape, dtype=buf.dtype, device=device)
+            parent._buffers[parts[-1]] = real
+            materialized.append(name)
+
+    if materialized:
+        log.warning(
+            f"Force-materialized {len(materialized)} meta tensors on {device}: "
+            f"{materialized}"
+        )
+
+    return len(materialized)
+
+
 def normalize_ogham_labels(text: str) -> str:
     """
     Normalize Ogham text for tokenizer compatibility.
@@ -346,9 +395,11 @@ def setup_ogham_model_and_tokenizer(
     log.info(f"Loading model: {model_name}")
 
     # Load model and processor
-    # Force all tensors to CPU (avoids meta-device issues with safetensors lazy loading)
     import torch
     model = VisionEncoderDecoderModel.from_pretrained(model_name)
+    # Materialize any tensors left on 'meta' device by lazy loading,
+    # BEFORE .to("cpu") which silently skips meta tensors in PyTorch 2.x
+    _force_materialize_meta_tensors(model, device="cpu")
     model = model.to("cpu")
     processor = TrOCRProcessor.from_pretrained(model_name)
 
@@ -418,6 +469,7 @@ def setup_transliteration_model(
 
     import torch
     model = VisionEncoderDecoderModel.from_pretrained(model_name)
+    _force_materialize_meta_tensors(model, device="cpu")
     model = model.to("cpu")
     processor = TrOCRProcessor.from_pretrained(model_name)
     tokenizer = processor.tokenizer

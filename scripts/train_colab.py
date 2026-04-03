@@ -473,12 +473,13 @@ def run_training(
     model, processor, tokenizer = setup_model(mode, model_name, init_strategy)
     model = model.to(device)
 
-    # Diagnostic: find any tensors still on meta device
-    meta_params = [(n, p.shape) for n, p in model.named_parameters() if p.device.type == "meta"]
-    meta_bufs = [(n, b.shape) for n, b in model.named_buffers() if b.device.type == "meta"]
-    if meta_params or meta_bufs:
-        log.warning(f"META-DEVICE params: {meta_params}")
-        log.warning(f"META-DEVICE buffers: {meta_bufs}")
+    # Safety net: force-materialize any tensors still on meta device.
+    # PyTorch 2.x's .to() silently skips meta tensors, so they can survive
+    # both the setup function and the .to(device) call above.
+    from src.training.tokenizer_extension import _force_materialize_meta_tensors
+    n_fixed = _force_materialize_meta_tensors(model, device=str(device))
+    if n_fixed:
+        log.warning(f"Fixed {n_fixed} meta tensors that survived .to({device})")
     else:
         log.info("All parameters and buffers on correct device")
 
