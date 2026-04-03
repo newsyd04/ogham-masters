@@ -471,6 +471,16 @@ def run_training(
     model, processor, tokenizer = setup_model(mode, model_name, init_strategy)
     model = model.to(device)
 
+    # Fix meta-device buffers (TrOCR-base embed_positions._float_tensor)
+    for name, buf in model.named_buffers():
+        if buf.device.type == "meta":
+            model_part = model
+            parts = name.split(".")
+            for part in parts[:-1]:
+                model_part = getattr(model_part, part)
+            setattr(model_part, parts[-1], torch.zeros_like(buf, device=device))
+            log.info(f"Fixed meta-device buffer: {name}")
+
     # Load checkpoint if resuming
     start_epoch = 0
     checkpoint_path = Path(checkpoint_dir)
