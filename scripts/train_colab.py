@@ -430,7 +430,14 @@ def evaluate(model, dataloader, tokenizer, device):
             outputs = model(pixel_values=pixel_values, labels=labels)
             total_loss += outputs.loss.item()
 
-            generated_ids = model.generate(pixel_values, max_length=64, num_beams=4)
+            generated_ids = model.generate(
+                pixel_values,
+                max_length=64,
+                num_beams=4,
+                decoder_start_token_id=tokenizer.cls_token_id,
+                eos_token_id=tokenizer.sep_token_id,
+                pad_token_id=tokenizer.pad_token_id,
+            )
             preds = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
             all_preds.extend(preds)
 
