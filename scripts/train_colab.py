@@ -481,7 +481,13 @@ def _fix_meta_tensors(model, device):
                     )
                     torch.nn.init.normal_(real, std=0.02)
                 else:
-                    real = torch.zeros(obj.shape, dtype=obj.dtype, device=device)
+                    # For positional embeddings, use proper init (not zeros!)
+                    real = torch.empty(obj.shape, dtype=obj.dtype, device=device)
+                    if "embed_positions" in full_name or "position" in full_name:
+                        # Initialize with small values — the model will learn proper positions
+                        torch.nn.init.normal_(real, std=0.02)
+                    else:
+                        real.zero_()
                 setattr(mod, attr_name, real)
     if meta_found:
         log.warning(f"Fixed {len(meta_found)} meta tensors: {meta_found}")
