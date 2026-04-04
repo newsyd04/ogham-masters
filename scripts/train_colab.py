@@ -526,6 +526,17 @@ def run_training(
         log.info(f"Resuming from checkpoint: {best_ckpt}")
         model = VisionEncoderDecoderModel.from_pretrained(str(best_ckpt)).to(device)
 
+        # Resume from correct epoch based on saved history
+        resume_history_path = checkpoint_path / f"history_{mode}.json"
+        if resume_history_path.exists():
+            try:
+                with open(resume_history_path) as f:
+                    prior = json.load(f)
+                start_epoch = len(prior.get("train_loss", []))
+                log.info(f"Resuming from epoch {start_epoch + 1}")
+            except (json.JSONDecodeError, KeyError):
+                pass
+
     # Create datasets (HF Hub or file-based)
     if hf_dataset:
         log.info(f"Loading from HF Hub: {hf_dataset}")
