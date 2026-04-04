@@ -453,6 +453,35 @@ def evaluate(model, dataloader, tokenizer, device):
     return {"loss": avg_loss, "cer": cer, "exact_match": exact}
 
 
+def _fix_meta_tensors(model, device):
+    """Scan ALL tensor attributes and move any stuck on meta device.
+
+    model.to(device) only moves nn.Parameters and registered buffers.
+    Plain tensor attributes (e.g. TrOCR's sinusoidal _float_tensor) are
+    invisible to .to() and stay on meta after from_pretrained().
+    """
+    meta_found = []
+    for mod_name, mod in model.named_modules():
+        for attr_name in list(vars(mod).keys()):
+            obj = getattr(mod, attr_name, None)
+            if isinstance(obj, torch.Tensor) and obj.device.type == "meta":
+                full_name = f"{mod_name}.{attr_name}" if mod_name else attr_name
+                meta_found.append(full_name)
+                if isinstance(obj, torch.nn.Parameter):
+                    real = torch.nn.Parameter(
+                        torch.empty(obj.shape, dtype=obj.dtype, device=device),
+                        requires_grad=obj.requires_grad,
+                    )
+                    torch.nn.init.normal_(real, std=0.02)
+                else:
+                    real = torch.zeros(obj.shape, dtype=obj.dtype, device=device)
+                setattr(mod, attr_name, real)
+    if meta_found:
+        log.warning(f"Fixed {len(meta_found)} meta tensors: {meta_found}")
+    else:
+        log.info("All tensors on correct device")
+
+
 def run_training(
     mode: str,
     model_name: str,
@@ -488,32 +517,7 @@ def run_training(
     log.info(f"Setting up model: {model_name} (mode: {mode})")
     model, processor, tokenizer = setup_model(mode, model_name, init_strategy)
     model = model.to(device)
-
-    # Safety net: scan ALL tensor attributes (params, buffers, AND plain attrs)
-    # model.to(device) only moves params/buffers. Plain tensor attributes like
-    # _float_tensor are invisible to .to() and stay on meta after init.
-    import torch as _torch
-    meta_found = []
-    for mod_name, mod in model.named_modules():
-        for attr_name in list(vars(mod).keys()):
-            obj = getattr(mod, attr_name, None)
-            if isinstance(obj, _torch.Tensor) and obj.device.type == "meta":
-                full_name = f"{mod_name}.{attr_name}" if mod_name else attr_name
-                meta_found.append(full_name)
-                # Replace with real tensor on target device
-                if isinstance(obj, _torch.nn.Parameter):
-                    real = _torch.nn.Parameter(
-                        _torch.empty(obj.shape, dtype=obj.dtype, device=device),
-                        requires_grad=obj.requires_grad,
-                    )
-                    _torch.nn.init.normal_(real, std=0.02)
-                else:
-                    real = _torch.zeros(obj.shape, dtype=obj.dtype, device=device)
-                setattr(mod, attr_name, real)
-    if meta_found:
-        log.warning(f"Fixed {len(meta_found)} meta tensors (incl. plain attrs): {meta_found}")
-    else:
-        log.info("All tensors (params, buffers, attrs) on correct device")
+    _fix_meta_tensors(model, device)
 
     # Load checkpoint if resuming
     start_epoch = 0
@@ -525,6 +529,7 @@ def run_training(
         from transformers import VisionEncoderDecoderModel
         log.info(f"Resuming from checkpoint: {best_ckpt}")
         model = VisionEncoderDecoderModel.from_pretrained(str(best_ckpt)).to(device)
+        _fix_meta_tensors(model, device)
 
         # Resume from correct epoch based on saved history
         resume_history_path = checkpoint_path / f"history_{mode}.json"
