@@ -278,7 +278,10 @@ def build_html(stones, curation):
                     <label>File:</label><span class="value" id="info-image" style="font-size:11px"></span>
                 </div>
                 <div class="info-row">
-                    <label>Transcription:</label><span class="value ogham-text" id="info-transcription"></span>
+                    <label>Transcription:</label>
+                    <input class="notes-input ogham-text" id="info-transcription" style="font-size:20px;letter-spacing:2px;flex:1;max-width:500px" oninput="saveTranscription()" />
+                    <span class="value" id="info-original-short" style="font-size:11px;color:#666;margin-left:10px"></span>
+                    <button class="tool-btn" onclick="resetTranscription()" style="margin-left:5px" title="Reset to original">Reset</button>
                 </div>
                 <div class="button-row">
                     <button class="btn btn-keep" onclick="setStatus('keep')">Keep (1)</button>
@@ -400,7 +403,10 @@ def build_html(stones, curation):
             document.getElementById('info-county').textContent = s.county;
             document.getElementById('info-source').textContent = s.source.toUpperCase();
             document.getElementById('info-image').textContent = s.image_name;
-            document.getElementById('info-transcription').textContent = s.transcription;
+            // Show edited transcription if exists, otherwise original
+            const editedTranscription = curation[key]?.transcription || s.transcription;
+            document.getElementById('info-transcription').value = editedTranscription;
+            document.getElementById('info-original-short').textContent = editedTranscription !== s.transcription ? '(edited) orig: ' + s.transcription.slice(0, 20) + '...' : '';
             document.getElementById('notes').value = curation[key]?.notes || '';
             document.getElementById('panel-label').textContent = s.source === 'raw' ? 'Raw Image' : 'Processed Image';
 
@@ -436,9 +442,16 @@ def build_html(stones, curation):
             ctx.restore();
 
             // Apply filters via pixel manipulation
-            if (inverted || greyscale || br !== 1 || co !== 1) {{
+            if (inverted || greyscale || br !== 1 || co !== 1 || sh > 0) {{
                 const imageData = ctx.getImageData(0, 0, w, h);
                 const d = imageData.data;
+
+                // Sharpen: unsharp mask (need original copy)
+                let orig = null;
+                if (sh > 0) {{
+                    orig = new Uint8ClampedArray(d);
+                }}
+
                 for (let i = 0; i < d.length; i += 4) {{
                     let r = d[i], g = d[i+1], b = d[i+2];
 
@@ -465,6 +478,32 @@ def build_html(stones, curation):
                     d[i+1] = Math.max(0, Math.min(255, g));
                     d[i+2] = Math.max(0, Math.min(255, b));
                 }}
+
+                // Sharpen pass (unsharp mask using 3x3 neighbor average)
+                if (sh > 0 && orig) {{
+                    const amount = sh / 50;  // 0-2 range
+                    const result = new Uint8ClampedArray(d);
+                    for (let y = 1; y < h - 1; y++) {{
+                        for (let x = 1; x < w - 1; x++) {{
+                            const idx = (y * w + x) * 4;
+                            for (let c = 0; c < 3; c++) {{
+                                // Average of 3x3 neighbors from original
+                                let blur = 0;
+                                for (let dy = -1; dy <= 1; dy++) {{
+                                    for (let dx = -1; dx <= 1; dx++) {{
+                                        blur += d[((y+dy) * w + (x+dx)) * 4 + c];
+                                    }}
+                                }}
+                                blur /= 9;
+                                // Unsharp mask: original + amount * (original - blur)
+                                const sharp = d[idx + c] + amount * (d[idx + c] - blur);
+                                result[idx + c] = Math.max(0, Math.min(255, sharp));
+                            }}
+                        }}
+                    }}
+                    for (let i = 0; i < d.length; i++) d[i] = result[i];
+                }}
+
                 ctx.putImageData(imageData, 0, 0);
             }}
 
@@ -575,8 +614,11 @@ def build_html(stones, curation):
             cancelCrop();
         }}
 
+        let isDragging = false;
+
         container.addEventListener('mousedown', (e) => {{
             if (!cropping) return;
+            isDragging = true;
             const rect = canvas.getBoundingClientRect();
             cropStart = {{ x: e.clientX - rect.left, y: e.clientY - rect.top }};
             cropEnd = null;
@@ -584,7 +626,7 @@ def build_html(stones, curation):
         }});
 
         container.addEventListener('mousemove', (e) => {{
-            if (!cropping || !cropStart) return;
+            if (!cropping || !isDragging || !cropStart) return;
             const rect = canvas.getBoundingClientRect();
             cropEnd = {{ x: e.clientX - rect.left, y: e.clientY - rect.top }};
 
@@ -600,6 +642,7 @@ def build_html(stones, curation):
         }});
 
         container.addEventListener('mouseup', () => {{
+            isDragging = false;
             if (!cropping) return;
             // Crop selection complete — click Apply Crop to confirm
         }});
@@ -636,6 +679,33 @@ def build_html(stones, curation):
             updateStats();
             goTo(currentIdx);
             setTimeout(() => navigate(1), 200);
+        }}
+
+        function saveTranscription() {{
+            const s = stones[currentIdx];
+            const key = s.stone_id + '/' + s.image_name;
+            if (!curation[key]) curation[key] = {{}};
+            const edited = document.getElementById('info-transcription').value;
+            curation[key].transcription = edited;
+            curation[key].original_transcription = s.transcription;
+            curation[key].stone_id = s.stone_id;
+            curation[key].image_name = s.image_name;
+            // Show edit indicator
+            document.getElementById('info-original-short').textContent =
+                edited !== s.transcription ? '(edited) orig: ' + s.transcription.slice(0, 20) + '...' : '';
+            saveCuration();
+        }}
+
+        function resetTranscription() {{
+            const s = stones[currentIdx];
+            document.getElementById('info-transcription').value = s.transcription;
+            document.getElementById('info-original-short').textContent = '';
+            const key = s.stone_id + '/' + s.image_name;
+            if (curation[key]) {{
+                delete curation[key].transcription;
+                delete curation[key].original_transcription;
+                saveCuration();
+            }}
         }}
 
         function saveNotes() {{
@@ -818,6 +888,7 @@ def main():
     CurationHandler.stones = stones
     CurationHandler.curation = curation
 
+    socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", PORT), CurationHandler) as httpd:
         print(f"\nCuration tool running at: http://localhost:{PORT}")
         print("Press Ctrl+C to stop\n")

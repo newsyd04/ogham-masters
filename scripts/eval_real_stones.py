@@ -86,6 +86,16 @@ def main():
             stone_ids = [line.strip() for line in f if line.strip()]
     print(f"Split: {args.split} ({len(stone_ids)} stones)")
 
+    # Load curated transcriptions if available
+    curation_file = DATASET_DIR / "processed" / "curation.json"
+    curation = {}
+    if curation_file.exists():
+        with open(curation_file) as f:
+            curation = json.load(f)
+        n_edited = sum(1 for v in curation.values() if "transcription" in v)
+        if n_edited:
+            print(f"Loaded {n_edited} curated transcriptions from curation.json")
+
     # Find images
     data_dir = Path(args.data_dir)
     samples = []
@@ -104,10 +114,17 @@ def main():
             # Skip metadata JSON files
             if img_path.suffix == ".json":
                 continue
+
+            # Use curated transcription if available
+            curation_key = f"{stone_id}/{img_path.name}"
+            curated_transcription = curation.get(curation_key, {}).get("transcription", None)
+            ref = curated_transcription if curated_transcription else transcription
+
             samples.append({
                 "stone_id": stone_id,
                 "image_path": str(img_path),
-                "reference": transcription,
+                "reference": ref,
+                "transcription_source": "curated" if curated_transcription else "original",
             })
 
     print(f"Found {len(samples)} images from {len(set(s['stone_id'] for s in samples))} stones")
