@@ -31,6 +31,7 @@ RAW_DIR = DATASET_DIR / "raw" / "images"
 CROPPED_DIR = DATASET_DIR / "processed" / "cropped"
 ANNOTATIONS_FILE = DATASET_DIR / "processed" / "annotations" / "transcriptions.json"
 CURATION_FILE = DATASET_DIR / "processed" / "curation.json"
+CURATED_DIR = DATASET_DIR / "curated"
 
 PORT = 8765
 
@@ -611,10 +612,30 @@ def build_html(stones, curation):
             curation[key].status = status;
             curation[key].stone_id = s.stone_id;
             curation[key].image_name = s.image_name;
+
+            // Save edited image to curated/ folder for keep and enhance
+            if (status === 'keep' || status === 'enhance') {{
+                const imageData = canvas.toDataURL('image/png');
+                fetch('/save-image', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        stone_id: s.stone_id,
+                        image_name: s.image_name,
+                        image_data: imageData,
+                    }}),
+                }}).then(r => r.json()).then(d => {{
+                    if (d.ok) {{
+                        curation[key].curated_path = d.path;
+                        saveCuration();
+                    }}
+                }});
+            }}
+
             saveCuration();
             updateStats();
             goTo(currentIdx);
-            setTimeout(() => navigate(1), 150);
+            setTimeout(() => navigate(1), 200);
         }}
 
         function saveNotes() {{
@@ -745,6 +766,37 @@ class CurationHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"ok": true}')
+
+        elif self.path == "/save-image":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            data = json.loads(body)
+
+            stone_id = data["stone_id"]
+            image_name = data["image_name"]
+            image_data = data["image_data"]  # base64 PNG from canvas
+
+            # Save to curated/<stone_id>/
+            stone_dir = CURATED_DIR / stone_id
+            stone_dir.mkdir(parents=True, exist_ok=True)
+
+            # Convert to PNG filename
+            out_name = Path(image_name).stem + ".png"
+            out_path = stone_dir / out_name
+
+            # Decode base64 and save
+            import base64 as b64
+            png_bytes = b64.b64decode(image_data.split(",")[1])
+            with open(out_path, "wb") as f:
+                f.write(png_bytes)
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            resp = json.dumps({"ok": True, "path": str(out_path)})
+            self.wfile.write(resp.encode())
+            print(f"  Saved curated image: {out_path}")
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -754,11 +806,14 @@ def main():
     stones = load_data()
     curation = load_curation()
 
+    CURATED_DIR.mkdir(parents=True, exist_ok=True)
+
     raw_count = sum(1 for s in stones if s["source"] == "raw")
     proc_count = sum(1 for s in stones if s["source"] == "processed")
     print(f"Loaded {len(stones)} images ({raw_count} raw, {proc_count} processed-only)")
     print(f"  from {len(set(s['stone_id'] for s in stones))} stones")
     print(f"Existing curation: {len(curation)} decisions")
+    print(f"Curated images will be saved to: {CURATED_DIR}")
 
     CurationHandler.stones = stones
     CurationHandler.curation = curation
