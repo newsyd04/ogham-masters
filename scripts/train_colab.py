@@ -533,18 +533,107 @@ def run_training(
     model = model.to(device)
     _fix_meta_tensors(model, device)
 
-    # Debug: verify generation config
-    log.info(f"Generation config: decoder_start={model.generation_config.decoder_start_token_id}, "
-             f"eos={model.generation_config.eos_token_id}, pad={model.generation_config.pad_token_id}")
-    log.info(f"Tokenizer: cls={tokenizer.cls_token_id}, sep={tokenizer.sep_token_id}, pad={tokenizer.pad_token_id}")
+    # === COMPREHENSIVE DEBUG LOGGING ===
+    log.info("=" * 40 + " DEBUG START " + "=" * 40)
 
-    # Check embed_positions weights
-    ep = model.decoder.model.decoder.embed_positions
-    if hasattr(ep, 'weights') and ep.weights is not None:
-        log.info(f"embed_positions.weights: shape={ep.weights.shape}, device={ep.weights.device}, "
-                 f"mean={ep.weights.float().mean():.4f}, std={ep.weights.float().std():.4f}")
+    # 1. Generation config
+    gc = model.generation_config
+    log.info(f"[DEBUG] generation_config.decoder_start_token_id = {gc.decoder_start_token_id}")
+    log.info(f"[DEBUG] generation_config.eos_token_id = {gc.eos_token_id}")
+    log.info(f"[DEBUG] generation_config.pad_token_id = {gc.pad_token_id}")
+    log.info(f"[DEBUG] generation_config.bos_token_id = {gc.bos_token_id}")
+    log.info(f"[DEBUG] generation_config.max_length = {gc.max_length}")
+    log.info(f"[DEBUG] generation_config.num_beams = {gc.num_beams}")
+
+    # 2. Model config
+    try:
+        mc = model.config.to_dict()
+        for k in ['decoder_start_token_id', 'pad_token_id', 'eos_token_id', 'bos_token_id']:
+            log.info(f"[DEBUG] model.config.{k} = {mc.get(k, 'NOT SET')}")
+    except Exception as e:
+        log.info(f"[DEBUG] model.config error: {e}")
+
+    # 3. Tokenizer IDs
+    log.info(f"[DEBUG] tokenizer.cls_token_id = {tokenizer.cls_token_id} (token: {tokenizer.cls_token})")
+    log.info(f"[DEBUG] tokenizer.sep_token_id = {tokenizer.sep_token_id} (token: {tokenizer.sep_token})")
+    log.info(f"[DEBUG] tokenizer.pad_token_id = {tokenizer.pad_token_id} (token: {tokenizer.pad_token})")
+    log.info(f"[DEBUG] tokenizer.bos_token_id = {tokenizer.bos_token_id}")
+    log.info(f"[DEBUG] tokenizer.eos_token_id = {tokenizer.eos_token_id}")
+    log.info(f"[DEBUG] tokenizer vocab size = {len(tokenizer)}")
+
+    # 4. Decoder type and positional embeddings
+    decoder = model.decoder.model.decoder
+    log.info(f"[DEBUG] Decoder type: {type(decoder).__name__}")
+    ep = decoder.embed_positions
+    log.info(f"[DEBUG] embed_positions type: {type(ep).__name__}")
+    if hasattr(ep, 'weights'):
+        w = ep.weights
+        if w is None:
+            log.info(f"[DEBUG] embed_positions.weights = None (will recompute on first forward)")
+        else:
+            log.info(f"[DEBUG] embed_positions.weights: shape={w.shape}, device={w.device}, "
+                     f"dtype={w.dtype}")
+            log.info(f"[DEBUG] embed_positions.weights stats: mean={w.float().mean():.6f}, "
+                     f"std={w.float().std():.6f}, min={w.float().min():.4f}, max={w.float().max():.4f}")
+            log.info(f"[DEBUG] embed_positions.weights all_zero={w.abs().sum().item() == 0}")
     else:
-        log.warning(f"embed_positions.weights is None — will recompute on first forward")
+        log.info(f"[DEBUG] embed_positions has no 'weights' attribute")
+
+    if hasattr(ep, 'weight'):
+        log.info(f"[DEBUG] embed_positions.weight (nn.Parameter): shape={ep.weight.shape}, device={ep.weight.device}")
+    if hasattr(ep, 'embedding_dim'):
+        log.info(f"[DEBUG] embed_positions.embedding_dim = {ep.embedding_dim}")
+    if hasattr(ep, 'padding_idx'):
+        log.info(f"[DEBUG] embed_positions.padding_idx = {ep.padding_idx}")
+
+    # 5. Embed tokens
+    et = decoder.embed_tokens
+    log.info(f"[DEBUG] embed_tokens type: {type(et).__name__}")
+    log.info(f"[DEBUG] embed_tokens.weight: shape={et.weight.shape}, device={et.weight.device}")
+    log.info(f"[DEBUG] embed_tokens.weight stats: mean={et.weight.float().mean():.6f}, "
+             f"std={et.weight.float().std():.6f}")
+
+    # 6. All meta tensors remaining
+    meta_count = 0
+    for name, param in model.named_parameters():
+        if param.device.type == "meta":
+            log.warning(f"[DEBUG] META PARAMETER: {name}")
+            meta_count += 1
+    for name, buf in model.named_buffers():
+        if buf.device.type == "meta":
+            log.warning(f"[DEBUG] META BUFFER: {name}")
+            meta_count += 1
+    for mod_name, mod in model.named_modules():
+        for attr_name in list(vars(mod).keys()):
+            obj = getattr(mod, attr_name, None)
+            if isinstance(obj, torch.Tensor) and obj.device.type == "meta":
+                log.warning(f"[DEBUG] META ATTR: {mod_name}.{attr_name}")
+                meta_count += 1
+    log.info(f"[DEBUG] Total remaining meta tensors: {meta_count}")
+
+    # 7. Quick test: generate on a dummy input
+    try:
+        dummy = torch.zeros(1, 3, 384, 384, device=device)
+        with torch.no_grad():
+            dummy_pixel = processor(images=[__import__('PIL').Image.new('RGB', (384, 384))],
+                                    return_tensors='pt').pixel_values.to(device)
+            dummy_ids = model.generate(
+                dummy_pixel, max_length=10, num_beams=1,
+                decoder_start_token_id=tokenizer.cls_token_id,
+                eos_token_id=tokenizer.sep_token_id,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+            dummy_text = tokenizer.decode(dummy_ids[0], skip_special_tokens=True)
+            log.info(f"[DEBUG] Dummy generate test: ids={dummy_ids[0].tolist()}, text='{dummy_text}'")
+    except Exception as e:
+        log.error(f"[DEBUG] Dummy generate FAILED: {e}")
+
+    # 8. Model parameter count by component
+    enc_params = sum(p.numel() for p in model.encoder.parameters())
+    dec_params = sum(p.numel() for p in model.decoder.parameters())
+    log.info(f"[DEBUG] Encoder params: {enc_params:,}, Decoder params: {dec_params:,}, Total: {enc_params+dec_params:,}")
+
+    log.info("=" * 40 + " DEBUG END " + "=" * 40)
 
     # Load checkpoint if resuming
     start_epoch = 0
