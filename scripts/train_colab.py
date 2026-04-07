@@ -533,6 +533,19 @@ def run_training(
     model = model.to(device)
     _fix_meta_tensors(model, device)
 
+    # Debug: verify generation config
+    log.info(f"Generation config: decoder_start={model.generation_config.decoder_start_token_id}, "
+             f"eos={model.generation_config.eos_token_id}, pad={model.generation_config.pad_token_id}")
+    log.info(f"Tokenizer: cls={tokenizer.cls_token_id}, sep={tokenizer.sep_token_id}, pad={tokenizer.pad_token_id}")
+
+    # Check embed_positions weights
+    ep = model.decoder.model.decoder.embed_positions
+    if hasattr(ep, 'weights') and ep.weights is not None:
+        log.info(f"embed_positions.weights: shape={ep.weights.shape}, device={ep.weights.device}, "
+                 f"mean={ep.weights.float().mean():.4f}, std={ep.weights.float().std():.4f}")
+    else:
+        log.warning(f"embed_positions.weights is None — will recompute on first forward")
+
     # Load checkpoint if resuming
     start_epoch = 0
     checkpoint_path = Path(checkpoint_dir)
