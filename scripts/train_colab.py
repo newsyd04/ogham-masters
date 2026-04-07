@@ -481,10 +481,15 @@ def _fix_meta_tensors(model, device):
                     )
                     torch.nn.init.normal_(real, std=0.02)
                     setattr(mod, attr_name, real)
+                elif hasattr(mod, 'get_embedding'):
+                    # Sinusoidal positional embedding — recompute and move to device
+                    recomputed = mod.get_embedding(
+                        obj.shape[0], obj.shape[1], getattr(mod, 'padding_idx', 1)
+                    ).to(device)
+                    setattr(mod, attr_name, recomputed)
                 else:
-                    # For sinusoidal positional embeddings, set to None
-                    # so the forward pass recomputes them correctly
-                    setattr(mod, attr_name, None)
+                    # Generic tensor — move to device
+                    setattr(mod, attr_name, torch.zeros(obj.shape, dtype=obj.dtype, device=device))
     if meta_found:
         log.warning(f"Fixed {len(meta_found)} meta tensors: {meta_found}")
     else:
