@@ -57,6 +57,20 @@ small_unfrozen_exact = [
     99.2, 99.7, 99.4, 99.8, 99.8,
 ]
 
+# PARSeq
+parseq_cer = [
+    57.75, 39.40, 30.57, 23.48, 20.77,
+    17.54, 15.42, 14.88, 13.18, 12.11,
+    11.78, 11.64, 10.60, 10.60, 9.67,
+    9.69, 9.47, 9.19, 9.00, 8.96,
+]
+parseq_exact = [
+    29.4, 38.7, 47.9, 55.0, 58.5,
+    60.8, 63.6, 65.3, 66.4, 67.4,
+    68.5, 69.2, 69.8, 70.1, 70.5,
+    70.8, 71.6, 72.1, 72.1, 72.2,
+]
+
 # Large models (single point, not epoch-based)
 large_models = {
     "GPT-4o\n(zero-shot)": 98.22,
@@ -70,6 +84,7 @@ colors = {
     "frozen": "#2196F3",
     "unfrozen": "#FF5722",
     "cnn_rnn": "#9C27B0",
+    "parseq": "#4CAF50",
     "large": "#607D8B",
 }
 
@@ -79,6 +94,7 @@ fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 # Full range
 ax1.plot(epochs, small_frozen_cer, "o-", color=colors["frozen"], label="TrOCR-small frozen", linewidth=2, markersize=4)
 ax1.plot(epochs, small_unfrozen_cer, "s-", color=colors["unfrozen"], label="TrOCR-small unfrozen", linewidth=2, markersize=4)
+ax1.plot(epochs, parseq_cer, "D-", color=colors["parseq"], label="PARSeq", linewidth=2, markersize=4)
 ax1.plot(epochs, cnn_rnn_cer, "^-", color=colors["cnn_rnn"], label="CNN+RNN (CTC)", linewidth=2, markersize=4)
 ax1.set_xlabel("Epoch")
 ax1.set_ylabel("CER (%)")
@@ -86,14 +102,15 @@ ax1.set_title("CER Over Training — All Models")
 ax1.legend(fontsize=9)
 ax1.set_ylim(-2, 80)
 
-# Zoomed to TrOCR only (epochs 6+)
+# Zoomed to TrOCR + PARSeq convergence
 ax2.plot(epochs[5:], small_frozen_cer[5:], "o-", color=colors["frozen"], label="TrOCR-small frozen", linewidth=2, markersize=5)
 ax2.plot(epochs, small_unfrozen_cer, "s-", color=colors["unfrozen"], label="TrOCR-small unfrozen", linewidth=2, markersize=5)
+ax2.plot(epochs, parseq_cer, "D-", color=colors["parseq"], label="PARSeq", linewidth=2, markersize=5)
 ax2.set_xlabel("Epoch")
 ax2.set_ylabel("CER (%)")
-ax2.set_title("CER Zoomed — TrOCR Models Only")
+ax2.set_title("CER Zoomed — Attention Models")
 ax2.legend(fontsize=9)
-ax2.set_ylim(-0.1, 3.5)
+ax2.set_ylim(-0.5, 60)
 
 fig.suptitle("Model Comparison: Character Error Rate", fontsize=14, fontweight="bold")
 plt.tight_layout()
@@ -106,6 +123,7 @@ fig, ax = plt.subplots(figsize=(10, 5))
 
 ax.plot(epochs, small_frozen_exact, "o-", color=colors["frozen"], label="TrOCR-small frozen", linewidth=2, markersize=4)
 ax.plot(epochs, small_unfrozen_exact, "s-", color=colors["unfrozen"], label="TrOCR-small unfrozen", linewidth=2, markersize=4)
+ax.plot(epochs, parseq_exact, "D-", color=colors["parseq"], label="PARSeq", linewidth=2, markersize=4)
 ax.plot(epochs, cnn_rnn_exact, "^-", color=colors["cnn_rnn"], label="CNN+RNN (CTC)", linewidth=2, markersize=4)
 ax.axhline(y=99, color="green", linestyle=":", alpha=0.4, label="99% target")
 ax.set_xlabel("Epoch")
@@ -125,6 +143,7 @@ fig, ax = plt.subplots(figsize=(12, 5))
 all_models = {
     "TrOCR-small\nunfrozen": 0.06,
     "TrOCR-small\nfrozen": 0.14,
+    "PARSeq": 8.96,
     "CNN+RNN\n(CTC)": 66.82,
     "Claude\n(few-shot)": 80.07,
     "GPT-4o\n(few-shot)": 93.23,
@@ -133,7 +152,7 @@ all_models = {
 }
 
 model_colors = [
-    colors["unfrozen"], colors["frozen"], colors["cnn_rnn"],
+    colors["unfrozen"], colors["frozen"], colors["parseq"], colors["cnn_rnn"],
     colors["large"], colors["large"], colors["large"], colors["large"],
 ]
 
