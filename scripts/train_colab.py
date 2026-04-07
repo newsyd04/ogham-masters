@@ -480,15 +480,11 @@ def _fix_meta_tensors(model, device):
                         requires_grad=obj.requires_grad,
                     )
                     torch.nn.init.normal_(real, std=0.02)
+                    setattr(mod, attr_name, real)
                 else:
-                    # For positional embeddings, use proper init (not zeros!)
-                    real = torch.empty(obj.shape, dtype=obj.dtype, device=device)
-                    if "embed_positions" in full_name or "position" in full_name:
-                        # Initialize with small values — the model will learn proper positions
-                        torch.nn.init.normal_(real, std=0.02)
-                    else:
-                        real.zero_()
-                setattr(mod, attr_name, real)
+                    # For sinusoidal positional embeddings, set to None
+                    # so the forward pass recomputes them correctly
+                    setattr(mod, attr_name, None)
     if meta_found:
         log.warning(f"Fixed {len(meta_found)} meta tensors: {meta_found}")
     else:
