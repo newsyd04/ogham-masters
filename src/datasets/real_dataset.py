@@ -152,11 +152,17 @@ class RealOghamDataset(Dataset):
             if not image_paths:
                 continue
 
+            # Build curation lookup by stem (extension-agnostic)
+            curation_by_stem = {}
+            for ck, cv in self.curation.items():
+                if ck.startswith(stone_id + "/"):
+                    stem = Path(ck).stem
+                    curation_by_stem[stem] = cv
+
             # Create a sample for each image
             for image_path in image_paths:
-                # Use curated transcription if available
-                curation_key = f"{stone_id}/{image_path.name}"
-                curation_entry = self.curation.get(curation_key, {})
+                # Match curation by stem (handles .jpg keys vs .png files)
+                curation_entry = curation_by_stem.get(image_path.stem, {})
 
                 # Skip images marked as 'drop' in curation
                 if curation_entry.get("status") == "drop":
