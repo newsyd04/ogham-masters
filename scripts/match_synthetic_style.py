@@ -62,12 +62,16 @@ def match_synthetic_style(
         noise_sigma: Noise sigma for stone texture simulation
         contrast_reduction: How much to reduce contrast (0 = full contrast, 1 = no contrast)
     """
+    # Rotate portrait images to landscape (synthetic images are always landscape)
+    h_in, w_in = image.shape[:2]
+    if h_in > w_in:
+        image = cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        h_in, w_in = image.shape[:2]
+
     # Auto-calculate width based on input aspect ratio (matching synthetic style)
     if target_width <= 0:
-        h_in, w_in = image.shape[:2]
         aspect = w_in / max(h_in, 1)
         # Synthetic images are 384 tall, width varies with text length
-        # Add padding margin (1.5x wider than the inscription)
         target_width = max(134, min(1200, int(target_height * aspect * 1.2)))
 
     # Step 1: Convert to greyscale
