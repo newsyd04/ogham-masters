@@ -388,10 +388,19 @@ def build_html(stones, curation):
             document.getElementById('btn-invert').classList.remove('active');
             document.getElementById('btn-grey').classList.remove('active');
 
-            // Load raw image
-            originalImage = await loadImage('/image?path=' + encodeURIComponent(s.image_path));
+            // Load image: curated version if previously kept/enhanced, otherwise raw
+            const curationEntry = curation[key] || {{}};
+            const hasCurated = (curationEntry.status === 'keep' || curationEntry.status === 'enhance') && curationEntry.curated_path;
+            const imgSrc = hasCurated
+                ? '/image?path=' + encodeURIComponent(curationEntry.curated_path)
+                : '/image?path=' + encodeURIComponent(s.image_path);
+            originalImage = await loadImage(imgSrc);
             currentImage = originalImage;
             drawCanvas();
+
+            // Show label indicating source
+            const srcLabel = hasCurated ? 'Curated (previously edited)' : (s.source === 'raw' ? 'Raw Image' : 'Processed Image');
+            document.getElementById('panel-label').textContent = srcLabel;
 
             // Load processed reference
             if (s.processed_path) {{
@@ -408,7 +417,6 @@ def build_html(stones, curation):
             document.getElementById('info-transcription').value = editedTranscription;
             document.getElementById('info-original-short').textContent = editedTranscription !== s.transcription ? '(edited) orig: ' + s.transcription.slice(0, 20) + '...' : '';
             document.getElementById('notes').value = curation[key]?.notes || '';
-            document.getElementById('panel-label').textContent = s.source === 'raw' ? 'Raw Image' : 'Processed Image';
 
             // Update button states
             const status = curation[key]?.status || '';
