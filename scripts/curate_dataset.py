@@ -249,6 +249,33 @@ def build_html(stones, curation):
                 <button class="tool-btn" onclick="zoomIn()">+</button>
                 <button class="tool-btn" onclick="zoomOut()">-</button>
                 <button class="tool-btn" onclick="zoomFit()">Fit</button>
+                <div class="tool-sep"></div>
+                <button class="tool-btn" onclick="toggleStyleMatch()" id="btn-style" title="Style match mode" style="background:#4CAF50;color:#fff">&#9881; Style Match</button>
+            </div>
+
+            <!-- Style Match toolbar (hidden by default) -->
+            <div class="toolbar" id="style-toolbar" style="display:none; background:#2e7d32;">
+                <span class="tool-label" style="color:#fff;font-weight:bold">STYLE MATCH:</span>
+                <span class="tool-label">Scale</span>
+                <input type="range" class="tool-slider" id="sm-scale" min="10" max="80" value="30" oninput="updateStyleMatch()">
+                <span class="tool-label" id="sm-scale-val">0.30</span>
+                <span class="tool-label">BG</span>
+                <input type="range" class="tool-slider" id="sm-bg" min="100" max="230" value="180" oninput="updateStyleMatch()">
+                <span class="tool-label" id="sm-bg-val">180</span>
+                <span class="tool-label">Stroke</span>
+                <input type="range" class="tool-slider" id="sm-stroke" min="20" max="160" value="80" oninput="updateStyleMatch()">
+                <span class="tool-label" id="sm-stroke-val">80</span>
+                <span class="tool-label">Blur</span>
+                <input type="range" class="tool-slider" id="sm-blur" min="0" max="50" value="10" oninput="updateStyleMatch()">
+                <span class="tool-label" id="sm-blur-val">1.0</span>
+                <span class="tool-label">Noise</span>
+                <input type="range" class="tool-slider" id="sm-noise" min="0" max="30" value="8" oninput="updateStyleMatch()">
+                <span class="tool-label" id="sm-noise-val">8</span>
+                <span class="tool-label">Contrast Red.</span>
+                <input type="range" class="tool-slider" id="sm-contrast" min="0" max="80" value="40" oninput="updateStyleMatch()">
+                <span class="tool-label" id="sm-contrast-val">0.40</span>
+                <div class="tool-sep"></div>
+                <button class="tool-btn" onclick="applyStyleToCanvas()" style="background:#fff;color:#2e7d32;font-weight:bold">Apply to Canvas</button>
             </div>
 
             <!-- Image area -->
@@ -265,6 +292,18 @@ def build_html(stones, curation):
                     <div class="image-panel-label">Processed</div>
                     <div class="image-container">
                         <img id="processed-image" src="" />
+                    </div>
+                </div>
+                <div class="image-panel" id="style-panel" style="display:none">
+                    <div class="image-panel-label">Style Matched (server-side)</div>
+                    <div class="image-container">
+                        <img id="style-image" src="" style="max-width:100%;max-height:100%" />
+                    </div>
+                </div>
+                <div class="image-panel" id="synth-panel" style="display:none">
+                    <div class="image-panel-label">Synthetic Reference</div>
+                    <div class="image-container">
+                        <img id="synth-image" src="" style="max-width:100%;max-height:100%" />
                     </div>
                 </div>
             </div>
@@ -773,6 +812,68 @@ def build_html(stones, curation):
             }});
         }});
 
+        // Style match functions
+        let styleMatchMode = false;
+        let styleMatchDebounce = null;
+
+        function toggleStyleMatch() {{
+            styleMatchMode = !styleMatchMode;
+            document.getElementById('style-toolbar').style.display = styleMatchMode ? 'flex' : 'none';
+            document.getElementById('style-panel').style.display = styleMatchMode ? 'flex' : 'none';
+            document.getElementById('synth-panel').style.display = styleMatchMode ? 'flex' : 'none';
+            document.getElementById('btn-style').classList.toggle('active');
+            if (styleMatchMode) {{
+                // Load synthetic reference
+                document.getElementById('synth-image').src = '/synth-sample';
+                updateStyleMatch();
+            }}
+        }}
+
+        function updateStyleMatch() {{
+            // Update slider value labels
+            document.getElementById('sm-scale-val').textContent = (document.getElementById('sm-scale').value / 100).toFixed(2);
+            document.getElementById('sm-bg-val').textContent = document.getElementById('sm-bg').value;
+            document.getElementById('sm-stroke-val').textContent = document.getElementById('sm-stroke').value;
+            document.getElementById('sm-blur-val').textContent = (document.getElementById('sm-blur').value / 10).toFixed(1);
+            document.getElementById('sm-noise-val').textContent = document.getElementById('sm-noise').value;
+            document.getElementById('sm-contrast-val').textContent = (document.getElementById('sm-contrast').value / 100).toFixed(2);
+
+            // Debounce server call
+            clearTimeout(styleMatchDebounce);
+            styleMatchDebounce = setTimeout(() => {{
+                const s = stones[currentIdx];
+                const params = new URLSearchParams({{
+                    path: s.image_path,
+                    scale: document.getElementById('sm-scale').value / 100,
+                    bg: document.getElementById('sm-bg').value,
+                    stroke: document.getElementById('sm-stroke').value,
+                    blur: document.getElementById('sm-blur').value / 10,
+                    noise: document.getElementById('sm-noise').value,
+                    contrast: document.getElementById('sm-contrast').value / 100,
+                }});
+                document.getElementById('style-image').src = '/style-match?' + params.toString();
+            }}, 200);
+        }}
+
+        function applyStyleToCanvas() {{
+            // Load the style-matched image onto the main canvas
+            const styleImg = document.getElementById('style-image');
+            if (styleImg.complete && styleImg.naturalWidth > 0) {{
+                const img = new Image();
+                img.onload = () => {{
+                    currentImage = img;
+                    rotation = 0;
+                    inverted = false;
+                    greyscale = false;
+                    document.getElementById('brightness').value = 100;
+                    document.getElementById('contrast').value = 100;
+                    document.getElementById('sharpen').value = 0;
+                    drawCanvas();
+                }};
+                img.src = styleImg.src;
+            }}
+        }}
+
         // Keyboard shortcuts
         document.addEventListener('keydown', e => {{
             if (e.target.tagName === 'INPUT') return;
@@ -830,6 +931,61 @@ class CurationHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self.send_response(404)
                 self.end_headers()
+
+        elif parsed.path == "/style-match":
+            import cv2
+            import numpy as np
+            params = parse_qs(parsed.query)
+            img_path = params.get("path", [""])[0]
+            if os.path.exists(img_path):
+                from scripts.match_synthetic_style import match_synthetic_style
+                image = cv2.imread(img_path)
+                result = match_synthetic_style(
+                    image,
+                    inscription_scale=float(params.get("scale", [0.3])[0]),
+                    bg_intensity=int(params.get("bg", [180])[0]),
+                    stroke_intensity=int(params.get("stroke", [80])[0]),
+                    blur_sigma=float(params.get("blur", [1.0])[0]),
+                    noise_sigma=float(params.get("noise", [8.0])[0]),
+                    contrast_reduction=float(params.get("contrast", [0.4])[0]),
+                )
+                _, png_data = cv2.imencode(".png", result)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.end_headers()
+                self.wfile.write(png_data.tobytes())
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        elif parsed.path == "/synth-sample":
+            # Serve a random synthetic image for reference
+            synth_dir = DATASET_DIR / "synthetic_demo"
+            if not synth_dir.exists():
+                synth_dir = DATASET_DIR / "synthetic_training"
+            if synth_dir.exists():
+                images = list(synth_dir.glob("**/*.png")) + list(synth_dir.glob("**/*.jpg"))
+                if images:
+                    import random
+                    img_path = random.choice(images)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.end_headers()
+                    with open(img_path, "rb") as f:
+                        self.wfile.write(f.read())
+                    return
+            # Fallback: generate a simple grey placeholder
+            import cv2
+            import numpy as np
+            placeholder = np.full((384, 384, 3), 180, dtype=np.uint8)
+            cv2.putText(placeholder, "No synthetic samples found", (30, 192),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
+            _, png_data = cv2.imencode(".png", placeholder)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.end_headers()
+            self.wfile.write(png_data.tobytes())
+
         else:
             self.send_response(404)
             self.end_headers()
