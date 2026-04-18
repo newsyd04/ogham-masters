@@ -53,6 +53,7 @@ class RealOghamDataset(Dataset):
         confidence_filter: Optional[List[str]] = None,
         return_metadata: bool = False,
         mode: str = "ogham",
+        curated_dir: Optional[str] = None,
     ):
         """
         Initialize dataset.
@@ -80,6 +81,14 @@ class RealOghamDataset(Dataset):
         self.confidence_filter = confidence_filter or ["verified", "probable"]
         self.return_metadata = return_metadata
         self.mode = mode
+        self.curated_dir = Path(curated_dir) if curated_dir else None
+
+        # Load curation data if curated_dir is provided
+        self.curation = {}
+        curation_file = self.data_dir / "processed" / "curation.json"
+        if curation_file.exists():
+            with open(curation_file) as f:
+                self.curation = json.load(f)
 
         # Load samples
         self.samples = self._load_split()
@@ -128,25 +137,40 @@ class RealOghamDataset(Dataset):
             if not transcription:
                 continue
 
-            # Find all cropped images for this stone
-            crop_dir = self.data_dir / "processed" / "cropped" / stone_id
-
-            if crop_dir.exists():
+            # Find images: prefer curated dir, then processed/cropped, then raw
+            image_paths = []
+            if self.curated_dir and (self.curated_dir / stone_id).exists():
+                curated_stone_dir = self.curated_dir / stone_id
+                image_paths = list(curated_stone_dir.glob("*.png")) + list(curated_stone_dir.glob("*.jpg"))
+            elif (self.data_dir / "processed" / "cropped" / stone_id).exists():
+                crop_dir = self.data_dir / "processed" / "cropped" / stone_id
                 image_paths = list(crop_dir.glob("*.png")) + list(crop_dir.glob("*.jpg"))
-            else:
-                # Try raw images directory
+            elif (self.data_dir / "raw" / "images" / stone_id).exists():
                 raw_dir = self.data_dir / "raw" / "images" / stone_id
-                if raw_dir.exists():
-                    image_paths = list(raw_dir.glob("*.png")) + list(raw_dir.glob("*.jpg"))
-                else:
-                    continue
+                image_paths = list(raw_dir.glob("*.png")) + list(raw_dir.glob("*.jpg"))
+
+            if not image_paths:
+                continue
 
             # Create a sample for each image
             for image_path in image_paths:
+                # Use curated transcription if available
+                curation_key = f"{stone_id}/{image_path.name}"
+                curation_entry = self.curation.get(curation_key, {})
+
+                # Skip images marked as 'drop' in curation
+                if curation_entry.get("status") == "drop":
+                    continue
+
+                # Use edited transcription if available
+                sample_transcription = curation_entry.get("transcription", transcription)
+                if not sample_transcription:
+                    continue
+
                 samples.append({
                     "image_path": str(image_path),
                     "stone_id": stone_id,
-                    "transcription": transcription,
+                    "transcription": sample_transcription,
                     "confidence": confidence,
                     "is_synthetic": False,
                 })

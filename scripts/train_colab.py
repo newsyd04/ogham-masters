@@ -515,6 +515,7 @@ def run_training(
     device_str: str,
     num_workers: int,
     hf_dataset: Optional[str] = None,
+    curated_dir: Optional[str] = None,
 ) -> Dict:
     """Run a complete training session."""
     import torch
@@ -719,6 +720,7 @@ def run_training(
             processor=processor,
             tokenizer=tokenizer,
             mode=mode,
+            curated_dir=curated_dir,
         )
         log.info(f"Real dataset: {len(real_dataset)} samples")
 
@@ -891,6 +893,8 @@ def main():
                         help="Path to pre-generated validation data")
     parser.add_argument("--real-data-dir", type=str, default=None,
                         help="Path to real stone data (Phase 2)")
+    parser.add_argument("--curated-dir", type=str, default=None,
+                        help="Path to curated images (overrides processed/cropped)")
     parser.add_argument("--font-dir", type=str, default="data/fonts",
                         help="Path to Ogham fonts (for on-the-fly generation)")
 
@@ -946,6 +950,7 @@ def main():
                 data_dir=args.data_dir,
                 val_data_dir=args.val_data_dir,
                 real_data_dir=args.real_data_dir,
+                curated_dir=args.curated_dir,
                 font_dir=args.font_dir,
                 phase=args.phase,
                 epochs=args.epochs,
