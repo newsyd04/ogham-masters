@@ -842,8 +842,11 @@ def build_html(stones, curation):
             clearTimeout(styleMatchDebounce);
             styleMatchDebounce = setTimeout(() => {{
                 const s = stones[currentIdx];
+                const key = s.stone_id + '/' + s.image_name;
+                const curationEntry = curation[key] || {{}};
+                const imgPath = (curationEntry.curated_path) ? curationEntry.curated_path : s.image_path;
                 const params = new URLSearchParams({{
-                    path: s.image_path,
+                    path: imgPath,
                     scale: document.getElementById('sm-scale').value / 100,
                     bg: document.getElementById('sm-bg').value,
                     stroke: document.getElementById('sm-stroke').value,
@@ -938,6 +941,7 @@ class CurationHandler(http.server.BaseHTTPRequestHandler):
             params = parse_qs(parsed.query)
             img_path = params.get("path", [""])[0]
             if os.path.exists(img_path):
+                sys.path.insert(0, str(PROJECT_ROOT))
                 from scripts.match_synthetic_style import match_synthetic_style
                 image = cv2.imread(img_path)
                 result = match_synthetic_style(

@@ -40,7 +40,7 @@ from PIL import Image
 def match_synthetic_style(
     image: np.ndarray,
     target_height: int = 384,
-    target_width: int = 384,
+    target_width: int = 0,  # 0 = auto based on aspect ratio
     inscription_scale: float = 0.3,
     bg_intensity: int = 180,
     stroke_intensity: int = 80,
@@ -62,6 +62,14 @@ def match_synthetic_style(
         noise_sigma: Noise sigma for stone texture simulation
         contrast_reduction: How much to reduce contrast (0 = full contrast, 1 = no contrast)
     """
+    # Auto-calculate width based on input aspect ratio (matching synthetic style)
+    if target_width <= 0:
+        h_in, w_in = image.shape[:2]
+        aspect = w_in / max(h_in, 1)
+        # Synthetic images are 384 tall, width varies with text length
+        # Add padding margin (1.5x wider than the inscription)
+        target_width = max(134, min(1200, int(target_height * aspect * 1.2)))
+
     # Step 1: Convert to greyscale
     if len(image.shape) == 3:
         grey = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -79,27 +87,31 @@ def match_synthetic_style(
     # Step 3: Resize inscription to be small within the target
     h, w = binary.shape
     max_inscription_h = int(target_height * inscription_scale)
-    max_inscription_w = int(target_width * inscription_scale * 3)  # wider for horizontal text
+    max_inscription_w = int(target_width * 0.9)  # leave some margin
 
-    scale = min(max_inscription_h / h, max_inscription_w / w)
-    if scale < 1:
-        new_h = int(h * scale)
-        new_w = int(w * scale)
-        resized = cv2.resize(binary, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    else:
-        resized = binary
-        new_h, new_w = h, w
+    # Always resize to fit within target bounds
+    scale = min(max_inscription_h / max(h, 1), max_inscription_w / max(w, 1))
+    new_h = max(1, int(h * scale))
+    new_w = max(1, int(w * scale))
+    resized = cv2.resize(binary, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    # Clamp to target dimensions
+    new_h = min(new_h, target_height)
+    new_w = min(new_w, target_width)
+    resized = resized[:new_h, :new_w]
 
     # Step 4: Create grey background and place inscription in center
     output = np.full((target_height, target_width), bg_intensity, dtype=np.uint8)
 
     # Center the inscription
-    y_offset = (target_height - new_h) // 2
-    x_offset = (target_width - new_w) // 2
+    y_offset = max(0, (target_height - new_h) // 2)
+    x_offset = max(0, (target_width - new_w) // 2)
 
     # Place inscription — where binary is dark (strokes), use stroke_intensity
     roi = output[y_offset:y_offset + new_h, x_offset:x_offset + new_w]
     mask = resized < 128  # stroke pixels
+    # Ensure mask matches roi shape exactly
+    mask = mask[:roi.shape[0], :roi.shape[1]]
     roi[mask] = stroke_intensity
 
     # Step 5: Reduce contrast by blending towards mid-grey
