@@ -62,16 +62,9 @@ def match_synthetic_style(
         noise_sigma: Noise sigma for stone texture simulation
         contrast_reduction: How much to reduce contrast (0 = full contrast, 1 = no contrast)
     """
-    # Rotate landscape images to portrait if needed
-    # Synthetic images are 384 tall, typically narrower than tall
-    h_in, w_in = image.shape[:2]
-    if w_in > h_in * 2:
-        # Very wide image — rotate to portrait
-        image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
-        h_in, w_in = image.shape[:2]
-
     # Auto-calculate width based on input aspect ratio
     # Synthetic images: height=384, width=134-1075 (most 200-600)
+    h_in, w_in = image.shape[:2]
     if target_width <= 0:
         aspect = w_in / max(h_in, 1)
         target_width = max(134, min(1200, int(target_height * aspect * 1.2)))
