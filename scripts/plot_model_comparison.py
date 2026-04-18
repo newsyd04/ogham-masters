@@ -146,14 +146,16 @@ all_models = {
     "PARSeq": 8.96,
     "CNN+RNN\n(CTC)": 66.82,
     "Claude\n(few-shot)": 80.07,
+    "TrOCR-base": 90.43,
     "GPT-4o\n(few-shot)": 93.23,
     "Claude\n(zero-shot)": 97.33,
     "GPT-4o\n(zero-shot)": 98.22,
+    "TrOCR-small\nUNTRAINED": 100.12,
 }
 
 model_colors = [
     colors["unfrozen"], colors["frozen"], colors["parseq"], colors["cnn_rnn"],
-    colors["large"], colors["large"], colors["large"], colors["large"],
+    colors["large"], "#03A9F4", colors["large"], colors["large"], colors["large"], "#BDBDBD",
 ]
 
 bars = ax.bar(all_models.keys(), all_models.values(), color=model_colors, edgecolor="white", linewidth=0.5)
