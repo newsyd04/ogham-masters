@@ -32,6 +32,20 @@ CROPPED_DIR = DATASET_DIR / "processed" / "cropped"
 ANNOTATIONS_FILE = DATASET_DIR / "processed" / "annotations" / "transcriptions.json"
 CURATION_FILE = DATASET_DIR / "processed" / "curation.json"
 CURATED_DIR = DATASET_DIR / "curated"
+TRACED_DIR = DATASET_DIR / "traced"         # synthetic-style (lines only on grey bg)
+OVERLAY_DIR = DATASET_DIR / "overlay"       # Josh's option A (lines on stone photo)
+TRACES_FILE = DATASET_DIR / "processed" / "traces.json"
+
+# Synthetic-style rendering constants (match src/generation/renderer.py)
+SYNTH_TARGET_HEIGHT = 384
+SYNTH_PADDING = 20
+SYNTH_BG_RGB = (180, 180, 180)
+SYNTH_STROKE_RGB = (50, 50, 50)
+# Cap aspect ratio to match TrOCR training distribution. Synthetic images in
+# training peaked at roughly 4:1 — inscriptions wider than that get compressed
+# horizontally on output so the TrOCR image processor's forced 384x384 resize
+# doesn't squash them beyond recognition.
+SYNTH_MAX_ASPECT = 4.0
 
 PORT = 8765
 
@@ -116,6 +130,101 @@ def save_curation(curation):
         json.dump(curation, f, indent=2, ensure_ascii=False)
 
 
+def _load_traces():
+    if TRACES_FILE.exists():
+        with open(TRACES_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def _save_traces(traces):
+    TRACES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(TRACES_FILE, "w") as f:
+        json.dump(traces, f, indent=2, ensure_ascii=False)
+
+
+def _render_traced_to_synthetic(image_data_url: str) -> bytes:
+    """Convert a transparent black-strokes PNG into a synthetic-style
+    grey-background PNG matching the TrOCR training distribution.
+
+    Steps:
+      1. Decode the input PNG with alpha channel
+      2. Extract the alpha mask (where strokes exist)
+      3. Crop to bounding box of strokes + a small padding
+      4. Scale the inscription so the inscription content is 384px tall
+      5. Composite onto grey background with dark-grey strokes
+      6. Letterbox: if aspect ratio exceeds the training maximum (~4:1),
+         pad the top and bottom of the image with grey so the aspect ratio
+         drops to 4:1. This preserves stroke proportions when the TrOCR
+         image processor later force-resizes to 384×384.
+    """
+    import cv2
+    import numpy as np
+    import base64 as b64
+
+    # Decode base64 PNG
+    png_bytes = b64.b64decode(image_data_url.split(",")[1])
+    arr = np.frombuffer(png_bytes, dtype=np.uint8)
+    img_rgba = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+
+    if img_rgba is None or img_rgba.shape[-1] < 4:
+        # No alpha channel — treat black pixels as the mask
+        gray = cv2.cvtColor(img_rgba, cv2.COLOR_BGR2GRAY) if img_rgba.ndim == 3 else img_rgba
+        alpha = 255 - gray
+    else:
+        alpha = img_rgba[..., 3]
+
+    # Find bounding box of the strokes
+    ys, xs = np.where(alpha > 10)
+    if len(xs) == 0:
+        # Empty trace — return a plain grey image
+        blank = np.full((SYNTH_TARGET_HEIGHT, SYNTH_TARGET_HEIGHT, 3), SYNTH_BG_RGB, dtype=np.uint8)
+        _, buf = cv2.imencode(".png", cv2.cvtColor(blank, cv2.COLOR_RGB2BGR))
+        return buf.tobytes()
+
+    x1, x2 = xs.min(), xs.max()
+    y1, y2 = ys.min(), ys.max()
+    pad = 8
+    x1 = max(0, x1 - pad)
+    y1 = max(0, y1 - pad)
+    x2 = min(alpha.shape[1] - 1, x2 + pad)
+    y2 = min(alpha.shape[0] - 1, y2 + pad)
+    cropped_alpha = alpha[y1:y2 + 1, x1:x2 + 1]
+
+    # Scale inscription content to SYNTH_TARGET_HEIGHT tall with aspect preserved.
+    ch, cw = cropped_alpha.shape
+    inner_h = SYNTH_TARGET_HEIGHT - 2 * SYNTH_PADDING
+    scale = inner_h / ch
+    inner_w = max(inner_h, int(cw * scale))
+    mask_resized = cv2.resize(cropped_alpha, (inner_w, inner_h), interpolation=cv2.INTER_AREA)
+
+    # Canvas is target_height tall, with symmetric horizontal padding
+    canvas_h = SYNTH_TARGET_HEIGHT
+    canvas_w = inner_w + 2 * SYNTH_PADDING
+    out = np.full((canvas_h, canvas_w, 3), SYNTH_BG_RGB, dtype=np.uint8)
+    stroke = np.array(SYNTH_STROKE_RGB, dtype=np.uint8)
+    mask_norm = (mask_resized.astype(np.float32) / 255.0)[..., None]
+    roi = out[SYNTH_PADDING:SYNTH_PADDING + inner_h,
+              SYNTH_PADDING:SYNTH_PADDING + inner_w]
+    roi[:] = (roi.astype(np.float32) * (1 - mask_norm) +
+              stroke.astype(np.float32) * mask_norm).astype(np.uint8)
+
+    # Letterbox vertically so the processor's 384x384 resize doesn't destroy
+    # the strokes. If aspect ratio > SYNTH_MAX_ASPECT, grow the canvas height
+    # by adding symmetric grey bars above and below the inscription.
+    aspect = canvas_w / canvas_h
+    if aspect > SYNTH_MAX_ASPECT:
+        new_h = int(round(canvas_w / SYNTH_MAX_ASPECT))
+        letterbox = np.full((new_h, canvas_w, 3), SYNTH_BG_RGB, dtype=np.uint8)
+        y_off = (new_h - canvas_h) // 2
+        letterbox[y_off:y_off + canvas_h] = out
+        out = letterbox
+
+    out_bgr = cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
+    _, buf = cv2.imencode(".png", out_bgr)
+    return buf.tobytes()
+
+
 def build_html(stones, curation):
     """Build the single-page HTML app with image editing tools."""
 
@@ -145,6 +254,7 @@ def build_html(stones, curation):
         .status-keep {{ color: #4caf50; }}
         .status-enhance {{ color: #ff9800; }}
         .status-drop {{ color: #f44336; }}
+        .status-traced {{ color: #ba68c8; }}
         .status-pending {{ color: #666; }}
         .filter-row {{ padding: 8px 12px; background: #0f3460; display: flex; gap: 4px; flex-wrap: wrap; }}
         .filter-btn {{ padding: 3px 8px; border: 1px solid #333; border-radius: 3px; background: transparent; color: #aaa; cursor: pointer; font-size: 11px; }}
@@ -198,6 +308,23 @@ def build_html(stones, curation):
 
         /* Crop overlay */
         .crop-overlay {{ position: absolute; border: 2px dashed #e94560; background: rgba(233,69,96,0.1); pointer-events: none; }}
+
+        /* Trace overlay */
+        #trace-canvas {{ position: absolute; top: 0; left: 0; max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: auto; cursor: crosshair; display: none; }}
+        #trace-canvas.active {{ display: block; }}
+
+        /* Character keypad (assisted mode) — sits as its own column in the image-area */
+        .keypad-column {{ width: 280px; min-width: 280px; max-width: 280px; background: #16213e; border-left: 2px solid #ba68c8; padding: 12px; overflow-y: auto; display: none; flex-shrink: 0; }}
+        .keypad-column.active {{ display: block; }}
+        .keypad {{ background: transparent; border: none; padding: 0; }}
+        .keypad h4 {{ color: #ba68c8; font-size: 12px; margin-bottom: 4px; letter-spacing: 1px; }}
+        .keypad-row {{ display: flex; gap: 4px; margin-bottom: 4px; flex-wrap: wrap; }}
+        .keypad-btn {{ flex: 1; min-width: 42px; padding: 8px 4px; background: #0f3460; color: #fff; border: 1px solid #333; border-radius: 4px; cursor: pointer; font-family: monospace; font-size: 14px; }}
+        .keypad-btn:hover {{ background: #1a4a80; border-color: #ba68c8; }}
+        .keypad-btn .letter {{ display: block; font-size: 10px; color: #aaa; }}
+        .keypad-btn .glyph {{ font-size: 22px; line-height: 1; letter-spacing: 1px; }}
+        .keypad-hint {{ font-size: 10px; color: #aaa; margin-top: 8px; line-height: 1.4; }}
+        .keypad-step {{ color: #ba68c8; font-weight: bold; font-size: 12px; margin-bottom: 6px; }}
     </style>
 </head>
 <body>
@@ -206,6 +333,7 @@ def build_html(stones, curation):
         <div class="stats">
             Total: <span id="total">0</span> |
             Keep: <span id="n-keep" style="color:#4caf50">0</span> |
+            Traced: <span id="n-traced" style="color:#ba68c8">0</span> |
             Enhance: <span id="n-enhance" style="color:#ff9800">0</span> |
             Drop: <span id="n-drop" style="color:#f44336">0</span> |
             Pending: <span id="n-pending">0</span>
@@ -217,6 +345,7 @@ def build_html(stones, curation):
                 <button class="filter-btn active" data-filter="all">All</button>
                 <button class="filter-btn" data-filter="pending">Pending</button>
                 <button class="filter-btn" data-filter="keep">Keep</button>
+                <button class="filter-btn" data-filter="traced">Traced</button>
                 <button class="filter-btn" data-filter="enhance">Enhance</button>
                 <button class="filter-btn" data-filter="drop">Drop</button>
             </div>
@@ -251,6 +380,7 @@ def build_html(stones, curation):
                 <button class="tool-btn" onclick="zoomFit()">Fit</button>
                 <div class="tool-sep"></div>
                 <button class="tool-btn" onclick="toggleStyleMatch()" id="btn-style" title="Style match mode" style="background:#4CAF50;color:#fff">&#9881; Style Match</button>
+                <button class="tool-btn" onclick="toggleTraceMode()" id="btn-trace" title="Trace mode (T)" style="background:#ba68c8;color:#fff">&#9997; Trace</button>
             </div>
 
             <!-- Style Match toolbar (hidden by default) -->
@@ -278,13 +408,59 @@ def build_html(stones, curation):
                 <button class="tool-btn" onclick="applyStyleToCanvas()" style="background:#fff;color:#2e7d32;font-weight:bold">Apply to Canvas</button>
             </div>
 
+            <!-- Trace toolbar (hidden by default) -->
+            <div class="toolbar" id="trace-toolbar" style="display:none; background:#4a148c;">
+                <span class="tool-label" style="color:#fff;font-weight:bold">TRACE:</span>
+                <button class="tool-btn" onclick="setTraceMode('freeform')" id="btn-tm-freeform" style="background:#ba68c8;color:#fff">Freeform</button>
+                <button class="tool-btn" onclick="setTraceMode('assisted')" id="btn-tm-assisted">Assisted</button>
+                <div class="tool-sep"></div>
+                <button class="tool-btn" onclick="setTraceTool('brush')" id="btn-tool-brush" style="background:#ba68c8;color:#fff">&#9997; Brush</button>
+                <button class="tool-btn" onclick="setTraceTool('eraser')" id="btn-tool-eraser">&#9003; Eraser</button>
+                <div class="tool-sep"></div>
+                <span class="tool-label">Size</span>
+                <input type="range" class="tool-slider" id="brush-size" min="2" max="14" value="6" oninput="updateBrushSizeLabel()">
+                <span class="tool-label" id="brush-size-val">6</span>
+                <div class="tool-sep"></div>
+                <button class="tool-btn" onclick="undoTrace()" title="Undo last stroke">&#8634; Undo</button>
+                <button class="tool-btn" onclick="clearTrace()" title="Clear all">&#10007; Clear</button>
+                <div class="tool-sep"></div>
+                <button class="tool-btn" onclick="renderTrace()" style="background:#fff;color:#4a148c;font-weight:bold" title="Render as synthetic">&#9654; Render</button>
+                <button class="tool-btn" onclick="saveTraced()" style="background:#4caf50;color:#fff;font-weight:bold" title="Save as traced">Save Traced (0)</button>
+            </div>
+
             <!-- Image area -->
             <div class="image-area">
                 <div class="image-panel" id="main-panel">
                     <div class="image-panel-label" id="panel-label">Raw Image</div>
                     <div class="image-container" id="image-container">
                         <canvas id="main-canvas"></canvas>
+                        <canvas id="trace-canvas"></canvas>
                         <div class="crop-overlay" id="crop-overlay" style="display:none"></div>
+                    </div>
+                </div>
+                <div class="keypad-column" id="keypad-column">
+                    <div class="keypad" id="keypad">
+                        <div class="keypad-step" id="keypad-step">Step 1: click the stem line start point</div>
+                        <h4>B-aicme (below stem)</h4>
+                        <div class="keypad-row" id="kp-b"></div>
+                        <h4>H-aicme (above stem)</h4>
+                        <div class="keypad-row" id="kp-h"></div>
+                        <h4>M-aicme (across stem)</h4>
+                        <div class="keypad-row" id="kp-m"></div>
+                        <h4>A-aicme (vowels on stem)</h4>
+                        <div class="keypad-row" id="kp-a"></div>
+                        <h4>Special</h4>
+                        <div class="keypad-row">
+                            <button class="keypad-btn" onclick="insertSpace()" style="flex:2"><span class="letter">SPACE</span><span class="glyph">&nbsp;</span></button>
+                            <button class="keypad-btn" onclick="undoAssistedChar()"><span class="letter">UNDO</span><span class="glyph">&#8634;</span></button>
+                        </div>
+                        <div class="keypad-hint">Click position on stem, then pick character. Vowels are short notches on the stem.</div>
+                    </div>
+                </div>
+                <div class="image-panel" id="traced-panel" style="display:none">
+                    <div class="image-panel-label">Traced (synthetic-style)</div>
+                    <div class="image-container">
+                        <img id="traced-image" src="" style="max-width:100%;max-height:100%" />
                     </div>
                 </div>
                 <div class="divider" id="divider" style="display:none"></div>
@@ -332,7 +508,7 @@ def build_html(stones, curation):
                     <span class="progress" id="progress"></span>
                     <button class="btn btn-export" onclick="exportResults()">Export</button>
                 </div>
-                <div class="keyboard-hint">Keys: 1=Keep 2=Enhance 3=Drop | A/D=Nav | R=Rotate | I=Invert | G=Grey | P=Toggle Processed | +/-=Zoom | 0=Reset</div>
+                <div class="keyboard-hint">Keys: 1=Keep 2=Enhance 3=Drop T=Trace | A/D=Nav | R=Rotate | I=Invert | G=Grey | P=Toggle Processed | +/-=Zoom | 0=Reset | Ctrl+Z=Undo trace</div>
             </div>
         </div>
     </div>
@@ -370,19 +546,21 @@ def build_html(stones, curation):
         }}
 
         function updateStats() {{
-            let keep = 0, enhance = 0, drop = 0, pending = 0;
+            let keep = 0, enhance = 0, drop = 0, traced = 0, pending = 0;
             stones.forEach(s => {{
                 const key = s.stone_id + '/' + s.image_name;
                 const status = curation[key]?.status || 'pending';
                 if (status === 'keep') keep++;
                 else if (status === 'enhance') enhance++;
                 else if (status === 'drop') drop++;
+                else if (status === 'traced') traced++;
                 else pending++;
             }});
             document.getElementById('total').textContent = stones.length;
             document.getElementById('n-keep').textContent = keep;
             document.getElementById('n-enhance').textContent = enhance;
             document.getElementById('n-drop').textContent = drop;
+            document.getElementById('n-traced').textContent = traced;
             document.getElementById('n-pending').textContent = pending;
         }}
 
@@ -464,6 +642,28 @@ def build_html(stones, curation):
 
             document.getElementById('progress').textContent = `${{idx + 1}} / ${{stones.length}}`;
             renderSidebar();
+
+            // If in trace mode, reset + attempt to reload any saved strokes
+            if (typeof traceMode !== 'undefined' && traceMode) {{
+                resetTraceState();
+                // Delay until the canvas has finished drawing
+                setTimeout(() => {{
+                    syncTraceCanvasSize();
+                    fetch('/trace-data?key=' + encodeURIComponent(key))
+                        .then(r => r.json())
+                        .then(entry => {{
+                            if (entry && entry.strokes) {{
+                                traceStrokes = entry.strokes;
+                                stemP1 = entry.stem_p1 || null;
+                                stemP2 = entry.stem_p2 || null;
+                                if (stemP1 && stemP2) assistedStep = 2;
+                                updateAssistedHint();
+                                updateTraceCounter();
+                                drawTraceOverlay();
+                            }}
+                        }});
+                }}, 50);
+            }}
         }}
 
         function drawCanvas() {{
@@ -556,6 +756,11 @@ def build_html(stones, curation):
 
             // Zoom
             canvas.style.transform = `scale(${{zoom}})`;
+
+            // Keep trace overlay aligned when the main canvas is redrawn
+            if (typeof traceMode !== 'undefined' && traceMode) {{
+                setTimeout(() => {{ syncTraceCanvasSize(); drawTraceOverlay(); }}, 0);
+            }}
         }}
 
         function rotateImage(deg) {{
@@ -892,7 +1097,497 @@ def build_html(stones, curation):
             if (e.key === '=' || e.key === '+') zoomIn();
             if (e.key === '-') zoomOut();
             if (e.key === '0') resetImage();
+            if (e.key === 't' || e.key === 'T') toggleTraceMode();
+            if (traceMode && (e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {{ e.preventDefault(); undoTrace(); }}
         }});
+
+        // ============================================================
+        // TRACE MODE
+        // ============================================================
+        const OGHAM_CHARS = {{
+            B: {{glyph: 'ᚁ', aicme: 'b', count: 1}},
+            L: {{glyph: 'ᚂ', aicme: 'b', count: 2}},
+            F: {{glyph: 'ᚃ', aicme: 'b', count: 3}},
+            S: {{glyph: 'ᚄ', aicme: 'b', count: 4}},
+            N: {{glyph: 'ᚅ', aicme: 'b', count: 5}},
+            H: {{glyph: 'ᚆ', aicme: 'h', count: 1}},
+            D: {{glyph: 'ᚇ', aicme: 'h', count: 2}},
+            T: {{glyph: 'ᚈ', aicme: 'h', count: 3}},
+            C: {{glyph: 'ᚉ', aicme: 'h', count: 4}},
+            Q: {{glyph: 'ᚊ', aicme: 'h', count: 5}},
+            M: {{glyph: 'ᚋ', aicme: 'm', count: 1}},
+            G: {{glyph: 'ᚌ', aicme: 'm', count: 2}},
+            NG: {{glyph: 'ᚍ', aicme: 'm', count: 3}},
+            Z: {{glyph: 'ᚎ', aicme: 'm', count: 4}},
+            R: {{glyph: 'ᚏ', aicme: 'm', count: 5}},
+            A: {{glyph: 'ᚐ', aicme: 'a', count: 1}},
+            O: {{glyph: 'ᚑ', aicme: 'a', count: 2}},
+            U: {{glyph: 'ᚒ', aicme: 'a', count: 3}},
+            E: {{glyph: 'ᚓ', aicme: 'a', count: 4}},
+            I: {{glyph: 'ᚔ', aicme: 'a', count: 5}},
+        }};
+
+        let traceMode = false;
+        let traceSubMode = 'freeform';  // 'freeform' | 'assisted'
+        let traceTool = 'brush';        // 'brush' | 'eraser'
+        let traceDrawing = false;
+        let traceStrokes = [];          // {{kind, ...}}; freeform={{kind:'free', points, width}}, char={{kind:'char', charKey, t}}
+        let currentFreeStroke = null;
+
+        // Assisted-mode state
+        let assistedStep = 0;  // 0: stem p1, 1: stem p2, 2: picking position, 3: picking char
+        let stemP1 = null, stemP2 = null;
+        let pendingCharPos = null;  // projected anchor on the stem
+
+        const traceCanvas = document.getElementById('trace-canvas');
+        const traceCtx = traceCanvas.getContext('2d');
+
+        function buildKeypad() {{
+            const rows = {{b: 'kp-b', h: 'kp-h', m: 'kp-m', a: 'kp-a'}};
+            const order = {{
+                b: ['B', 'L', 'F', 'S', 'N'],
+                h: ['H', 'D', 'T', 'C', 'Q'],
+                m: ['M', 'G', 'NG', 'Z', 'R'],
+                a: ['A', 'O', 'U', 'E', 'I'],
+            }};
+            Object.keys(order).forEach(aicme => {{
+                const row = document.getElementById(rows[aicme]);
+                row.innerHTML = order[aicme].map(k => {{
+                    const c = OGHAM_CHARS[k];
+                    return `<button class="keypad-btn" onclick="pickChar('${{k}}')"><span class="letter">${{k}}</span><span class="glyph">${{c.glyph}}</span></button>`;
+                }}).join('');
+            }});
+        }}
+
+        function toggleTraceMode() {{
+            traceMode = !traceMode;
+            document.getElementById('trace-toolbar').style.display = traceMode ? 'flex' : 'none';
+            document.getElementById('btn-trace').classList.toggle('active', traceMode);
+            traceCanvas.classList.toggle('active', traceMode);
+            document.getElementById('keypad-column').classList.toggle('active', traceMode && traceSubMode === 'assisted');
+            document.getElementById('traced-panel').style.display = traceMode ? 'flex' : 'none';
+            if (traceMode) {{
+                syncTraceCanvasSize();
+                resetTraceState();
+                drawTraceOverlay();
+            }}
+        }}
+
+        function setTraceMode(mode) {{
+            traceSubMode = mode;
+            document.getElementById('btn-tm-freeform').style.background = mode === 'freeform' ? '#ba68c8' : '#16213e';
+            document.getElementById('btn-tm-freeform').style.color = mode === 'freeform' ? '#fff' : '#ccc';
+            document.getElementById('btn-tm-assisted').style.background = mode === 'assisted' ? '#ba68c8' : '#16213e';
+            document.getElementById('btn-tm-assisted').style.color = mode === 'assisted' ? '#fff' : '#ccc';
+            document.getElementById('keypad-column').classList.toggle('active', mode === 'assisted');
+            resetAssistedFlow();
+        }}
+
+        function setTraceTool(tool) {{
+            traceTool = tool;
+            document.getElementById('btn-tool-brush').style.background = tool === 'brush' ? '#ba68c8' : '#16213e';
+            document.getElementById('btn-tool-brush').style.color = tool === 'brush' ? '#fff' : '#ccc';
+            document.getElementById('btn-tool-eraser').style.background = tool === 'eraser' ? '#ba68c8' : '#16213e';
+            document.getElementById('btn-tool-eraser').style.color = tool === 'eraser' ? '#fff' : '#ccc';
+        }}
+
+        function updateBrushSizeLabel() {{
+            document.getElementById('brush-size-val').textContent = document.getElementById('brush-size').value;
+        }}
+
+        function resetTraceState() {{
+            traceStrokes = [];
+            currentFreeStroke = null;
+            resetAssistedFlow();
+            updateTraceCounter();
+        }}
+
+        function resetAssistedFlow() {{
+            assistedStep = 0;
+            stemP1 = stemP2 = null;
+            pendingCharPos = null;
+            updateAssistedHint();
+        }}
+
+        function updateAssistedHint() {{
+            const el = document.getElementById('keypad-step');
+            if (assistedStep === 0) el.textContent = 'Step 1: click stem line START point';
+            else if (assistedStep === 1) el.textContent = 'Step 2: click stem line END point';
+            else if (assistedStep === 2) el.textContent = 'Click position on stem for next character';
+            else if (assistedStep === 3) el.textContent = 'Now pick the character from keypad below';
+        }}
+
+        function syncTraceCanvasSize() {{
+            traceCanvas.width = canvas.width;
+            traceCanvas.height = canvas.height;
+            // Match visual size to main canvas
+            const r = canvas.getBoundingClientRect();
+            const cr = canvas.parentElement.getBoundingClientRect();
+            traceCanvas.style.width = r.width + 'px';
+            traceCanvas.style.height = r.height + 'px';
+            traceCanvas.style.left = (r.left - cr.left) + 'px';
+            traceCanvas.style.top = (r.top - cr.top) + 'px';
+        }}
+
+        function canvasCoordsFromEvent(e) {{
+            const rect = traceCanvas.getBoundingClientRect();
+            const sx = traceCanvas.width / rect.width;
+            const sy = traceCanvas.height / rect.height;
+            return {{
+                x: (e.clientX - rect.left) * sx,
+                y: (e.clientY - rect.top) * sy,
+            }};
+        }}
+
+        traceCanvas.addEventListener('mousedown', (e) => {{
+            if (!traceMode) return;
+            const p = canvasCoordsFromEvent(e);
+            if (traceSubMode === 'freeform') {{
+                traceDrawing = true;
+                const width = parseInt(document.getElementById('brush-size').value);
+                if (traceTool === 'brush') {{
+                    currentFreeStroke = {{kind: 'free', points: [p], width, erase: false}};
+                }} else {{
+                    currentFreeStroke = {{kind: 'free', points: [p], width: width * 2, erase: true}};
+                }}
+            }} else {{
+                // Assisted
+                if (assistedStep === 0) {{
+                    stemP1 = p;
+                    assistedStep = 1;
+                }} else if (assistedStep === 1) {{
+                    // Snap to horizontal — Ogham stems in training are always
+                    // flat, so force y2 == y1. Clicking by eye otherwise
+                    // introduces a slight diagonal that the processor's resize
+                    // exaggerates into a very visible tilt.
+                    stemP2 = {{x: p.x, y: stemP1.y}};
+                    assistedStep = 2;
+                }} else if (assistedStep === 2) {{
+                    // Project click onto stem line
+                    pendingCharPos = projectOntoStem(p);
+                    assistedStep = 3;
+                }}
+                updateAssistedHint();
+                drawTraceOverlay();
+            }}
+        }});
+
+        traceCanvas.addEventListener('mousemove', (e) => {{
+            if (!traceMode || traceSubMode !== 'freeform' || !traceDrawing) return;
+            const p = canvasCoordsFromEvent(e);
+            currentFreeStroke.points.push(p);
+            drawTraceOverlay();
+        }});
+
+        traceCanvas.addEventListener('mouseup', () => {{
+            if (!traceMode || traceSubMode !== 'freeform') return;
+            if (currentFreeStroke && currentFreeStroke.points.length > 1) {{
+                traceStrokes.push(currentFreeStroke);
+                updateTraceCounter();
+            }}
+            currentFreeStroke = null;
+            traceDrawing = false;
+            drawTraceOverlay();
+        }});
+
+        traceCanvas.addEventListener('mouseleave', () => {{
+            if (currentFreeStroke && currentFreeStroke.points.length > 1) {{
+                traceStrokes.push(currentFreeStroke);
+                updateTraceCounter();
+            }}
+            currentFreeStroke = null;
+            traceDrawing = false;
+        }});
+
+        function projectOntoStem(p) {{
+            if (!stemP1 || !stemP2) return p;
+            const dx = stemP2.x - stemP1.x;
+            const dy = stemP2.y - stemP1.y;
+            const l2 = dx * dx + dy * dy;
+            if (l2 < 1) return stemP1;
+            let t = ((p.x - stemP1.x) * dx + (p.y - stemP1.y) * dy) / l2;
+            t = Math.max(0, Math.min(1, t));
+            return {{x: stemP1.x + dx * t, y: stemP1.y + dy * t, t}};
+        }}
+
+        function pickChar(key) {{
+            if (traceSubMode !== 'assisted') return;
+            if (!pendingCharPos) {{ alert('Click a position on the stem first'); return; }}
+            traceStrokes.push({{kind: 'char', charKey: key, t: pendingCharPos.t}});
+            appendGlyphToTranscription(OGHAM_CHARS[key].glyph);
+            pendingCharPos = null;
+            assistedStep = 2;
+            updateAssistedHint();
+            updateTraceCounter();
+            drawTraceOverlay();
+        }}
+
+        function insertSpace() {{
+            appendGlyphToTranscription(' ');
+        }}
+
+        function appendGlyphToTranscription(glyph) {{
+            const field = document.getElementById('info-transcription');
+            field.value = (field.value || '') + glyph;
+            saveTranscription();
+        }}
+
+        function undoAssistedChar() {{
+            for (let i = traceStrokes.length - 1; i >= 0; i--) {{
+                if (traceStrokes[i].kind === 'char') {{
+                    traceStrokes.splice(i, 1);
+                    // Also pop last glyph from transcription
+                    const field = document.getElementById('info-transcription');
+                    field.value = field.value.slice(0, -1);
+                    saveTranscription();
+                    updateTraceCounter();
+                    drawTraceOverlay();
+                    return;
+                }}
+            }}
+        }}
+
+        function undoTrace() {{
+            if (traceStrokes.length === 0) return;
+            const last = traceStrokes.pop();
+            if (last.kind === 'char') {{
+                const field = document.getElementById('info-transcription');
+                field.value = field.value.slice(0, -1);
+                saveTranscription();
+            }}
+            updateTraceCounter();
+            drawTraceOverlay();
+        }}
+
+        function clearTrace() {{
+            if (!confirm('Clear all traced strokes?')) return;
+            traceStrokes = [];
+            currentFreeStroke = null;
+            resetAssistedFlow();
+            updateTraceCounter();
+            drawTraceOverlay();
+        }}
+
+        function updateTraceCounter() {{
+            const count = traceStrokes.length;
+            const btns = document.querySelectorAll('#trace-toolbar .tool-btn');
+            btns.forEach(b => {{ if (b.textContent.startsWith('Save Traced')) b.textContent = `Save Traced (${{count}})`; }});
+        }}
+
+        function drawTraceOverlay() {{
+            traceCtx.clearRect(0, 0, traceCanvas.width, traceCanvas.height);
+            // Draw stem guide (assisted mode preview)
+            if (traceSubMode === 'assisted') {{
+                if (stemP1 && stemP2) {{
+                    traceCtx.strokeStyle = 'rgba(186,104,200,0.9)';
+                    traceCtx.lineWidth = parseInt(document.getElementById('brush-size').value);
+                    traceCtx.beginPath();
+                    traceCtx.moveTo(stemP1.x, stemP1.y);
+                    traceCtx.lineTo(stemP2.x, stemP2.y);
+                    traceCtx.stroke();
+                }} else if (stemP1) {{
+                    traceCtx.fillStyle = '#ba68c8';
+                    traceCtx.beginPath();
+                    traceCtx.arc(stemP1.x, stemP1.y, 6, 0, Math.PI * 2);
+                    traceCtx.fill();
+                }}
+                if (pendingCharPos) {{
+                    traceCtx.fillStyle = 'rgba(255,255,0,0.8)';
+                    traceCtx.beginPath();
+                    traceCtx.arc(pendingCharPos.x, pendingCharPos.y, 5, 0, Math.PI * 2);
+                    traceCtx.fill();
+                }}
+            }}
+            // Draw all strokes
+            traceStrokes.forEach(st => {{
+                if (st.kind === 'free') {{
+                    drawFreeStroke(traceCtx, st);
+                }} else if (st.kind === 'char') {{
+                    const segs = charStrokeSegments(st.charKey, st.t);
+                    traceCtx.strokeStyle = '#222';
+                    traceCtx.lineWidth = parseInt(document.getElementById('brush-size').value);
+                    traceCtx.lineCap = 'round';
+                    segs.forEach(seg => {{
+                        traceCtx.beginPath();
+                        traceCtx.moveTo(seg.x1, seg.y1);
+                        traceCtx.lineTo(seg.x2, seg.y2);
+                        traceCtx.stroke();
+                    }});
+                }}
+            }});
+            // In-progress freeform stroke
+            if (currentFreeStroke && currentFreeStroke.points.length > 1) {{
+                drawFreeStroke(traceCtx, currentFreeStroke);
+            }}
+        }}
+
+        function drawFreeStroke(ctxRef, st) {{
+            if (st.erase) {{
+                ctxRef.globalCompositeOperation = 'destination-out';
+                ctxRef.strokeStyle = 'rgba(0,0,0,1)';
+            }} else {{
+                ctxRef.globalCompositeOperation = 'source-over';
+                ctxRef.strokeStyle = '#222';
+            }}
+            ctxRef.lineWidth = st.width;
+            ctxRef.lineCap = 'round';
+            ctxRef.lineJoin = 'round';
+            ctxRef.beginPath();
+            ctxRef.moveTo(st.points[0].x, st.points[0].y);
+            for (let i = 1; i < st.points.length; i++) {{
+                ctxRef.lineTo(st.points[i].x, st.points[i].y);
+            }}
+            ctxRef.stroke();
+            ctxRef.globalCompositeOperation = 'source-over';
+        }}
+
+        function charStrokeSegments(charKey, t) {{
+            const char = OGHAM_CHARS[charKey];
+            if (!char || !stemP1 || !stemP2) return [];
+            const dx = stemP2.x - stemP1.x, dy = stemP2.y - stemP1.y;
+            const len = Math.hypot(dx, dy) || 1;
+            const ux = dx / len, uy = dy / len;       // unit along stem
+            const px = -uy, py = ux;                  // unit perpendicular (screen "up"-ish)
+            const ax = stemP1.x + ux * t * len;
+            const ay = stemP1.y + uy * t * len;
+            const spacing = 8;   // px between strokes of same char
+            const strokeLen = 28;
+            const notchLen = 6;
+            const segs = [];
+            for (let i = 0; i < char.count; i++) {{
+                const off = (i - (char.count - 1) / 2) * spacing;
+                const sx = ax + ux * off;
+                const sy = ay + uy * off;
+                if (char.aicme === 'b') {{
+                    segs.push({{x1: sx, y1: sy, x2: sx + px * strokeLen, y2: sy + py * strokeLen}});
+                }} else if (char.aicme === 'h') {{
+                    segs.push({{x1: sx, y1: sy, x2: sx - px * strokeLen, y2: sy - py * strokeLen}});
+                }} else if (char.aicme === 'm') {{
+                    const hl = strokeLen * 0.6;
+                    segs.push({{x1: sx - px * hl, y1: sy - py * hl, x2: sx + px * hl, y2: sy + py * hl}});
+                }} else if (char.aicme === 'a') {{
+                    segs.push({{x1: sx - px * notchLen, y1: sy - py * notchLen, x2: sx + px * notchLen, y2: sy + py * notchLen}});
+                }}
+            }}
+            return segs;
+        }}
+
+        function flattenStrokesToCanvas() {{
+            // Flatten the current trace (stem line + strokes + freehand) to a
+            // black-on-transparent canvas matching the trace canvas resolution.
+            const flat = document.createElement('canvas');
+            flat.width = traceCanvas.width;
+            flat.height = traceCanvas.height;
+            const fctx = flat.getContext('2d');
+            fctx.clearRect(0, 0, flat.width, flat.height);
+            fctx.strokeStyle = '#000';
+            fctx.fillStyle = '#000';
+            fctx.lineCap = 'round';
+            fctx.lineJoin = 'round';
+            const brush = parseInt(document.getElementById('brush-size').value);
+
+            // Draw the stem line first (assisted mode), so characters sit on top
+            if (stemP1 && stemP2) {{
+                fctx.lineWidth = brush;
+                fctx.beginPath();
+                fctx.moveTo(stemP1.x, stemP1.y);
+                fctx.lineTo(stemP2.x, stemP2.y);
+                fctx.stroke();
+            }}
+
+            traceStrokes.forEach(st => {{
+                if (st.kind === 'free') {{
+                    if (st.erase) return;
+                    fctx.lineWidth = st.width;
+                    fctx.beginPath();
+                    fctx.moveTo(st.points[0].x, st.points[0].y);
+                    for (let i = 1; i < st.points.length; i++) fctx.lineTo(st.points[i].x, st.points[i].y);
+                    fctx.stroke();
+                }} else if (st.kind === 'char') {{
+                    const segs = charStrokeSegments(st.charKey, st.t);
+                    fctx.lineWidth = brush;
+                    segs.forEach(seg => {{
+                        fctx.beginPath();
+                        fctx.moveTo(seg.x1, seg.y1);
+                        fctx.lineTo(seg.x2, seg.y2);
+                        fctx.stroke();
+                    }});
+                }}
+            }});
+            return flat;
+        }}
+
+        function renderTrace() {{
+            const hasStem = stemP1 && stemP2;
+            if (traceStrokes.length === 0 && !hasStem) {{ alert('Nothing to render'); return; }}
+            const flat = flattenStrokesToCanvas();
+            const imageData = flat.toDataURL('image/png');
+            fetch('/render-traced', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{image_data: imageData}}),
+            }}).then(r => r.json()).then(d => {{
+                if (d.ok) {{
+                    document.getElementById('traced-image').src = d.data_url;
+                }}
+            }});
+        }}
+
+        function buildOverlayComposite() {{
+            // Composite the stone photo (main canvas, with any user filters applied)
+            // with the trace strokes rendered on top. This is Josh's "option A":
+            // the original image annotated by eye, which the OCR model will read.
+            const flat = flattenStrokesToCanvas();
+            const composite = document.createElement('canvas');
+            composite.width = canvas.width;
+            composite.height = canvas.height;
+            const cctx = composite.getContext('2d');
+            // Stone photo (with brightness/contrast/invert already baked in by drawCanvas)
+            cctx.drawImage(canvas, 0, 0);
+            // Trace strokes on top — the trace canvas is aligned to the main canvas
+            // and shares resolution, so stamping flat at (0,0) matches pixel positions.
+            cctx.drawImage(flat, 0, 0);
+            return composite;
+        }}
+
+        function saveTraced() {{
+            const hasStem = stemP1 && stemP2;
+            if (traceStrokes.length === 0 && !hasStem) {{ alert('Trace something first'); return; }}
+            const s = stones[currentIdx];
+            const key = s.stone_id + '/' + s.image_name;
+
+            const synthFlat = flattenStrokesToCanvas();
+            const overlay = buildOverlayComposite();
+
+            fetch('/save-traced', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{
+                    stone_id: s.stone_id,
+                    image_name: s.image_name,
+                    image_data: synthFlat.toDataURL('image/png'),
+                    overlay_data: overlay.toDataURL('image/png'),
+                    strokes: traceStrokes,
+                    sub_mode: traceSubMode,
+                    stem_p1: stemP1, stem_p2: stemP2,
+                }}),
+            }}).then(r => r.json()).then(d => {{
+                if (d.ok) {{
+                    if (!curation[key]) curation[key] = {{}};
+                    curation[key].status = 'traced';
+                    curation[key].trace_path = d.trace_path;
+                    curation[key].overlay_path = d.overlay_path;
+                    curation[key].stone_id = s.stone_id;
+                    curation[key].image_name = s.image_name;
+                    saveCuration();
+                    updateStats();
+                    goTo(currentIdx);
+                    setTimeout(() => {{ navigate(1); }}, 200);
+                }}
+            }});
+        }}
+
+        buildKeypad();
 
         // Init
         updateStats();
@@ -961,6 +1656,16 @@ class CurationHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self.send_response(404)
                 self.end_headers()
+
+        elif parsed.path == "/trace-data":
+            params = parse_qs(parsed.query)
+            key = params.get("key", [""])[0]
+            traces = _load_traces()
+            entry = traces.get(key, {})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(entry).encode())
 
         elif parsed.path == "/synth-sample":
             # Serve a random synthetic image for reference
@@ -1035,6 +1740,79 @@ class CurationHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(resp.encode())
             print(f"  Saved curated image: {out_path}")
 
+        elif self.path == "/render-traced":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            data = json.loads(body)
+            image_data = data["image_data"]
+
+            synth_png = _render_traced_to_synthetic(image_data)
+            import base64 as b64
+            data_url = "data:image/png;base64," + b64.b64encode(synth_png).decode()
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            resp = json.dumps({"ok": True, "data_url": data_url})
+            self.wfile.write(resp.encode())
+
+        elif self.path == "/save-traced":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            data = json.loads(body)
+
+            stone_id = data["stone_id"]
+            image_name = data["image_name"]
+            image_data = data["image_data"]         # transparent lines layer
+            overlay_data = data.get("overlay_data")  # stone + lines composite
+            strokes = data.get("strokes", [])
+            import base64 as b64
+
+            # (1) Synthetic-style render (lines only on grey bg) — my Option B
+            synth_png = _render_traced_to_synthetic(image_data)
+            traced_dir = TRACED_DIR / stone_id
+            traced_dir.mkdir(parents=True, exist_ok=True)
+            traced_name = Path(image_name).stem + "_traced.png"
+            traced_path = traced_dir / traced_name
+            with open(traced_path, "wb") as f:
+                f.write(synth_png)
+
+            # (2) Overlay composite (stone + drawn lines) — Josh's Option A, primary
+            overlay_path = None
+            if overlay_data:
+                overlay_dir = OVERLAY_DIR / stone_id
+                overlay_dir.mkdir(parents=True, exist_ok=True)
+                overlay_name = Path(image_name).stem + "_overlay.png"
+                overlay_path = overlay_dir / overlay_name
+                overlay_bytes = b64.b64decode(overlay_data.split(",")[1])
+                with open(overlay_path, "wb") as f:
+                    f.write(overlay_bytes)
+
+            # Persist strokes for re-editing
+            traces_all = _load_traces()
+            traces_all[f"{stone_id}/{image_name}"] = {
+                "strokes": strokes,
+                "sub_mode": data.get("sub_mode"),
+                "stem_p1": data.get("stem_p1"),
+                "stem_p2": data.get("stem_p2"),
+                "trace_path": str(traced_path),
+                "overlay_path": str(overlay_path) if overlay_path else None,
+            }
+            _save_traces(traces_all)
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            resp = json.dumps({
+                "ok": True,
+                "trace_path": str(traced_path),
+                "overlay_path": str(overlay_path) if overlay_path else None,
+            })
+            self.wfile.write(resp.encode())
+            print(f"  Saved traced (synthetic-style): {traced_path}")
+            if overlay_path:
+                print(f"  Saved overlay (stone + lines): {overlay_path}")
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -1045,6 +1823,8 @@ def main():
     curation = load_curation()
 
     CURATED_DIR.mkdir(parents=True, exist_ok=True)
+    TRACED_DIR.mkdir(parents=True, exist_ok=True)
+    OVERLAY_DIR.mkdir(parents=True, exist_ok=True)
 
     raw_count = sum(1 for s in stones if s["source"] == "raw")
     proc_count = sum(1 for s in stones if s["source"] == "processed")
@@ -1052,6 +1832,8 @@ def main():
     print(f"  from {len(set(s['stone_id'] for s in stones))} stones")
     print(f"Existing curation: {len(curation)} decisions")
     print(f"Curated images will be saved to: {CURATED_DIR}")
+    print(f"Traced (synthetic-style) will be saved to: {TRACED_DIR}")
+    print(f"Overlay (stone + lines) will be saved to: {OVERLAY_DIR}")
 
     CurationHandler.stones = stones
     CurationHandler.curation = curation
@@ -1061,9 +1843,9 @@ def main():
         print(f"\nCuration tool running at: http://localhost:{PORT}")
         print("Press Ctrl+C to stop\n")
         print("Keyboard shortcuts:")
-        print("  1=Keep  2=Enhance  3=Drop  A/D=Navigate")
+        print("  1=Keep  2=Enhance  3=Drop  T=Trace  A/D=Navigate")
         print("  R=Rotate  I=Invert  G=Greyscale  P=Show Processed")
-        print("  +/-=Zoom  0=Reset  C=Crop")
+        print("  +/-=Zoom  0=Reset  C=Crop  Ctrl+Z=Undo last trace stroke")
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

@@ -115,9 +115,26 @@ def main():
             if img_path.suffix == ".json":
                 continue
 
-            # Use curated transcription if available
-            curation_key = f"{stone_id}/{img_path.name}"
-            curated_transcription = curation.get(curation_key, {}).get("transcription", None)
+            # Use curated transcription if available. Traced / overlay files
+            # have a suffix that doesn't exist in the curation keys, so strip
+            # it and try multiple extensions.
+            stem = img_path.stem
+            for suffix in ("_traced", "_overlay"):
+                if stem.endswith(suffix):
+                    stem = stem[:-len(suffix)]
+                    break
+            candidate_keys = [
+                f"{stone_id}/{img_path.name}",
+                f"{stone_id}/{stem}.jpg",
+                f"{stone_id}/{stem}.JPG",
+                f"{stone_id}/{stem}.png",
+            ]
+            curated_transcription = None
+            for k in candidate_keys:
+                t = curation.get(k, {}).get("transcription")
+                if t:
+                    curated_transcription = t
+                    break
             ref = curated_transcription if curated_transcription else transcription
 
             samples.append({
