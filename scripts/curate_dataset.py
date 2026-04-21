@@ -207,11 +207,12 @@ def _render_strokes_as_synthetic(strokes, stem_p1, stem_p2):
                 cv2.line(canvas, (sx, stem_y), (sx, stem_y - stroke_len),
                          color, stroke_thickness, cv2.LINE_AA)
             elif aicme == "m":
-                # Diagonal top-left to bottom-right, matching font-rendered Ogham
+                # Diagonal bottom-left to top-right ("/") — canonical Ogham M-aicme
+                # direction, matching how the Ogham Unicode glyphs are rendered.
                 half = int(stroke_len * 0.5)
                 cv2.line(canvas,
-                         (sx - half, stem_y - half),
-                         (sx + half, stem_y + half),
+                         (sx - half, stem_y + half),
+                         (sx + half, stem_y - half),
                          color, stroke_thickness, cv2.LINE_AA)
             elif aicme == "a":
                 cv2.line(canvas, (sx, stem_y - notch_len), (sx, stem_y + notch_len),
@@ -1542,8 +1543,12 @@ def build_html(stones, curation):
                 }} else if (char.aicme === 'h') {{
                     segs.push({{x1: sx, y1: sy, x2: sx - px * strokeLen, y2: sy - py * strokeLen}});
                 }} else if (char.aicme === 'm') {{
-                    const hl = strokeLen * 0.6;
-                    segs.push({{x1: sx - px * hl, y1: sy - py * hl, x2: sx + px * hl, y2: sy + py * hl}});
+                    // Diagonal bottom-left to top-right ("/") — canonical Ogham direction
+                    const hl = strokeLen * 0.5;
+                    segs.push({{
+                        x1: sx - hl * ux + hl * px, y1: sy - hl * uy + hl * py,
+                        x2: sx + hl * ux - hl * px, y2: sy + hl * uy - hl * py,
+                    }});
                 }} else if (char.aicme === 'a') {{
                     segs.push({{x1: sx - px * notchLen, y1: sy - py * notchLen, x2: sx + px * notchLen, y2: sy + py * notchLen}});
                 }}
