@@ -143,6 +143,85 @@ def _save_traces(traces):
         json.dump(traces, f, indent=2, ensure_ascii=False)
 
 
+_OGHAM_GEOMETRY = {
+    "B": ("b", 1), "L": ("b", 2), "F": ("b", 3), "S": ("b", 4), "N": ("b", 5),
+    "H": ("h", 1), "D": ("h", 2), "T": ("h", 3), "C": ("h", 4), "Q": ("h", 5),
+    "M": ("m", 1), "G": ("m", 2), "NG": ("m", 3), "Z": ("m", 4), "R": ("m", 5),
+    "A": ("a", 1), "O": ("a", 2), "U": ("a", 3), "E": ("a", 4), "I": ("a", 5),
+}
+
+
+def _render_strokes_as_synthetic(strokes, stem_p1, stem_p2):
+    """Reconstruct a synthetic-style PNG from assisted-mode character strokes.
+
+    Instead of scaling the user's wide canvas, we rebuild the inscription at
+    synthetic-matching density — ~70px per character at 384 tall, with the
+    stem horizontally centred and strokes sized to match the training
+    distribution exactly. Returns None if insufficient assisted-mode data
+    (caller should fall back to the alpha-mask render).
+    """
+    import cv2
+    import numpy as np
+
+    char_strokes = [s for s in strokes if s.get("kind") == "char"]
+    if not char_strokes or not stem_p1 or not stem_p2:
+        return None
+
+    chars_sorted = sorted(char_strokes, key=lambda s: s.get("t", 0))
+    n = len(chars_sorted)
+
+    # Synthetic-matching parameters (tuned to training distribution)
+    height = SYNTH_TARGET_HEIGHT                          # 384
+    char_width = 70                                       # px per char
+    stroke_len = 80                                       # perpendicular line length
+    notch_len = 22                                        # half-length for vowel notches
+    stroke_thickness = 4                                  # px
+    stem_thickness = 4                                    # px
+    stroke_spacing = 14                                   # between strokes of same char
+    canvas_w = n * char_width + 2 * SYNTH_PADDING
+    stem_y = height // 2
+
+    canvas = np.full((height, canvas_w, 3), SYNTH_BG_RGB, dtype=np.uint8)
+    color = tuple(int(c) for c in SYNTH_STROKE_RGB)
+
+    cv2.line(canvas,
+             (SYNTH_PADDING, stem_y),
+             (canvas_w - SYNTH_PADDING, stem_y),
+             color, stem_thickness, cv2.LINE_AA)
+
+    for i, cs in enumerate(chars_sorted):
+        key = cs.get("charKey", "")
+        geom = _OGHAM_GEOMETRY.get(key)
+        if not geom:
+            continue
+        aicme, count = geom
+        cx = SYNTH_PADDING + (i + 0.5) * char_width
+
+        for j in range(count):
+            off = (j - (count - 1) / 2) * stroke_spacing
+            sx = int(round(cx + off))
+            if aicme == "b":
+                cv2.line(canvas, (sx, stem_y), (sx, stem_y + stroke_len),
+                         color, stroke_thickness, cv2.LINE_AA)
+            elif aicme == "h":
+                cv2.line(canvas, (sx, stem_y), (sx, stem_y - stroke_len),
+                         color, stroke_thickness, cv2.LINE_AA)
+            elif aicme == "m":
+                # Diagonal top-left to bottom-right, matching font-rendered Ogham
+                half = int(stroke_len * 0.5)
+                cv2.line(canvas,
+                         (sx - half, stem_y - half),
+                         (sx + half, stem_y + half),
+                         color, stroke_thickness, cv2.LINE_AA)
+            elif aicme == "a":
+                cv2.line(canvas, (sx, stem_y - notch_len), (sx, stem_y + notch_len),
+                         color, stroke_thickness, cv2.LINE_AA)
+
+    canvas_bgr = cv2.cvtColor(canvas, cv2.COLOR_RGB2BGR)
+    _, buf = cv2.imencode(".png", canvas_bgr)
+    return buf.tobytes()
+
+
 def _render_traced_to_synthetic(image_data_url: str) -> bytes:
     """Convert a transparent black-strokes PNG into a synthetic-style
     grey-background PNG matching the TrOCR training distribution.
@@ -1525,7 +1604,11 @@ def build_html(stones, curation):
             fetch('/render-traced', {{
                 method: 'POST',
                 headers: {{'Content-Type': 'application/json'}},
-                body: JSON.stringify({{image_data: imageData}}),
+                body: JSON.stringify({{
+                    image_data: imageData,
+                    strokes: traceStrokes,
+                    stem_p1: stemP1, stem_p2: stemP2,
+                }}),
             }}).then(r => r.json()).then(d => {{
                 if (d.ok) {{
                     document.getElementById('traced-image').src = d.data_url;
@@ -1746,7 +1829,13 @@ class CurationHandler(http.server.BaseHTTPRequestHandler):
             data = json.loads(body)
             image_data = data["image_data"]
 
-            synth_png = _render_traced_to_synthetic(image_data)
+            synth_png = _render_strokes_as_synthetic(
+                data.get("strokes", []),
+                data.get("stem_p1"),
+                data.get("stem_p2"),
+            )
+            if synth_png is None:
+                synth_png = _render_traced_to_synthetic(image_data)
             import base64 as b64
             data_url = "data:image/png;base64," + b64.b64encode(synth_png).decode()
 
@@ -1768,8 +1857,17 @@ class CurationHandler(http.server.BaseHTTPRequestHandler):
             strokes = data.get("strokes", [])
             import base64 as b64
 
-            # (1) Synthetic-style render (lines only on grey bg) — my Option B
-            synth_png = _render_traced_to_synthetic(image_data)
+            # (1) Synthetic-style render. If we have assisted-mode data (stem + char
+            # positions), reconstruct the inscription at synthetic density — this gives
+            # the model a much closer match to its training distribution than scaling
+            # the user's wide canvas down. Fall back to the alpha-mask render for
+            # pure freeform traces.
+            synth_png = _render_strokes_as_synthetic(strokes,
+                                                     data.get("stem_p1"),
+                                                     data.get("stem_p2"))
+            if synth_png is None:
+                synth_png = _render_traced_to_synthetic(image_data)
+
             traced_dir = TRACED_DIR / stone_id
             traced_dir.mkdir(parents=True, exist_ok=True)
             traced_name = Path(image_name).stem + "_traced.png"
