@@ -293,8 +293,10 @@ def _render_freeform_at_synthetic_density(image_data_url: str, n_chars: int) -> 
     intermediate_w = max(1, int(round(cw * hscale)))
     scaled = cv2.resize(cropped, (intermediate_w, inner_h), interpolation=cv2.INTER_AREA)
 
-    # Slice into n_chars equal-width parts, rescale each to 70px wide
-    char_width = 70
+    # Slice into n_chars equal-width parts. Cell width of 90px gives more
+    # room for hand-drawn strokes to stay distinguishable after rescaling
+    # (matches synthetic renderer's upper char-width range).
+    char_width = 90
     slice_w = intermediate_w / n_chars
     out_inner_w = n_chars * char_width
     out_w = out_inner_w + 2 * SYNTH_PADDING
