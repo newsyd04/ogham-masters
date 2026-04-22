@@ -42,10 +42,13 @@ SYNTH_PADDING = 20
 SYNTH_BG_RGB = (180, 180, 180)
 SYNTH_STROKE_RGB = (50, 50, 50)
 # Cap aspect ratio to match TrOCR training distribution. Synthetic images in
-# training peaked at roughly 4:1 — inscriptions wider than that get compressed
-# horizontally on output so the TrOCR image processor's forced 384x384 resize
-# doesn't squash them beyond recognition.
-SYNTH_MAX_ASPECT = 4.0
+# training typically sit around 1.5–2.5:1 — letterbox any rendered output wider
+# than 2.5:1 so the TrOCR image processor's forced 384x384 resize doesn't
+# compress the strokes horizontally to the point of merging.
+SYNTH_MAX_ASPECT = 2.5
+# Target stroke width in the rendered synthetic-style image (pixels at the
+# 384-tall canvas). Matches the synthetic renderer's stroke thickness band.
+SYNTH_TARGET_STROKE = 6
 
 PORT = 8765
 
@@ -254,6 +257,18 @@ def _render_traced_to_synthetic(image_data_url: str) -> bytes:
     else:
         alpha = img_rgba[..., 3]
 
+    # Smoothing pass — cleans up hand-drawn wobble and unifies stroke widths.
+    # 1. Gaussian blur to smooth edges and fill small discontinuities
+    # 2. Threshold back to binary
+    # 3. Morphological closing fills gaps in wobbly strokes
+    # 4. Morphological opening removes tiny specks / trembling-pen artefacts
+    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=2.5, sigmaY=2.5)
+    _, alpha = cv2.threshold(alpha, 60, 255, cv2.THRESH_BINARY)
+    close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    alpha = cv2.morphologyEx(alpha, cv2.MORPH_CLOSE, close_k)
+    open_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    alpha = cv2.morphologyEx(alpha, cv2.MORPH_OPEN, open_k)
+
     # Find bounding box of the strokes
     ys, xs = np.where(alpha > 10)
     if len(xs) == 0:
@@ -277,6 +292,27 @@ def _render_traced_to_synthetic(image_data_url: str) -> bytes:
     scale = inner_h / ch
     inner_w = max(inner_h, int(cw * scale))
     mask_resized = cv2.resize(cropped_alpha, (inner_w, inner_h), interpolation=cv2.INTER_AREA)
+
+    # Stroke-width normalisation: skeletonise the resized mask and re-dilate to a
+    # uniform SYNTH_TARGET_STROKE thickness so all strokes are consistent.
+    # Skeletonisation via iterative morphological thinning (Zhang-Suen) would be
+    # ideal, but we can approximate with distance-transform + threshold which is
+    # fast, robust, and available in base OpenCV.
+    try:
+        bin_mask = (mask_resized > 127).astype(np.uint8) * 255
+        dist = cv2.distanceTransform(bin_mask, cv2.DIST_L2, 3)
+        # Keep the "skeleton" (pixels that are local maxima of distance)
+        skel = cv2.dilate(dist, np.ones((3, 3), np.uint8))
+        skel_mask = ((dist >= skel - 1e-3) & (dist > 0.5)).astype(np.uint8) * 255
+        # Re-dilate to uniform stroke width
+        half = max(1, SYNTH_TARGET_STROKE // 2)
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * half + 1, 2 * half + 1))
+        mask_resized = cv2.dilate(skel_mask, k)
+    except cv2.error:
+        # If anything goes wrong with the skeleton pass, fall back to the
+        # un-normalised mask — the smoothing at the top of the function is
+        # still applied so results will be usable even without this step.
+        pass
 
     # Canvas is target_height tall, with symmetric horizontal padding
     canvas_h = SYNTH_TARGET_HEIGHT
