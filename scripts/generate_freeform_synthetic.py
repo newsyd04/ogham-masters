@@ -86,11 +86,11 @@ def build_freeform_augmenter(severity: str = "medium"):
         A.RandomBrightnessContrast(
             brightness_limit=0.08, contrast_limit=0.12, p=0.6
         ),
-        # Mild thickness jitter: dilate or erode slightly
-        A.OneOf([
-            A.Morphological(scale=(1, 2), operation="dilation", p=1.0),
-            A.Morphological(scale=(1, 2), operation="erosion", p=1.0),
-        ], p=0.4),
+        # Mild thinning only (erosion). We removed dilation because it was
+        # merging adjacent strokes within multi-stroke characters. Erosion
+        # makes strokes slightly thinner in some samples, which adds
+        # realistic variance without risking stroke fusion.
+        A.Morphological(scale=(1, 2), operation="erosion", p=0.2),
     ])
 
 
@@ -139,35 +139,32 @@ def main():
         writer = csv.writer(lf)
         writer.writerow(["image_file", "ogham_text", "latin_transliteration", "length", "severity"])
 
-        # Force the bg/stroke colours and a thick stemline to match what the
-        # curator tool saves (traced/ images all have bg=(180,180,180),
-        # strokes=(50,50,50), and consistent thick strokes).
+        # Force the bg/stroke colours to match what the curator tool saves.
+        # stemline_thickness=4 is mid-range (training used 2-6); thinner than
+        # before so it doesn't dominate the image.
         style_override = {
             "bg_color": TRACE_BG_RGB,
             "fg_color": TRACE_FG_RGB,
-            "stemline_thickness": 6,
+            "stemline_thickness": 4,
         }
 
-        # Pre-augmentation thickening: dilate strokes so font-rendered
-        # character lines end up thicker, roughly matching real traced
-        # stroke widths. Kernel size controls how much thicker.
+        # No full-mask dilation — it was merging adjacent strokes within
+        # multi-stroke characters (R, NG, etc.). Trust the font's native
+        # stroke thickness; clean up anti-aliasing by thresholding into
+        # binary colour on a solid grey background.
         import cv2
         import numpy as np
-        thicken_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 
         for i in range(args.num):
             text = sampler.sample()
             clean_img, _ = renderer.render(text, style_override=style_override)
 
-            # Thicken strokes (operate on inverse mask, then blend back)
-            # Gray the image, find dark pixels (strokes), dilate them.
+            # Snap anti-aliased edges to clean binary colour pairs (no
+            # thickening), on the fixed grey background.
             gray = cv2.cvtColor(clean_img, cv2.COLOR_RGB2GRAY)
-            stroke_mask = (gray < 120).astype(np.uint8) * 255
-            thick_mask = cv2.dilate(stroke_mask, thicken_kernel, iterations=1)
-            # Rebuild the image with thickened strokes
-            thickened = np.full_like(clean_img, TRACE_BG_RGB)
-            thickened[thick_mask > 0] = TRACE_FG_RGB
-            clean_img = thickened
+            stroke_mask = gray < 120
+            clean_img = np.full_like(clean_img, TRACE_BG_RGB)
+            clean_img[stroke_mask] = TRACE_FG_RGB
 
             # Apply freeform augmentations
             augmented = aug(image=clean_img)["image"]
