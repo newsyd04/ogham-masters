@@ -153,6 +153,16 @@ _OGHAM_GEOMETRY = {
     "A": ("a", 1), "O": ("a", 2), "U": ("a", 3), "E": ("a", 4), "I": ("a", 5),
 }
 
+# Reverse lookup: Ogham Unicode glyph → char key. Used to render a synthetic
+# reference for a given transcription so the user has a target to mimic while
+# freeform-tracing.
+_GLYPH_TO_KEY = {
+    "ᚁ": "B", "ᚂ": "L", "ᚃ": "F", "ᚄ": "S", "ᚅ": "N",
+    "ᚆ": "H", "ᚇ": "D", "ᚈ": "T", "ᚉ": "C", "ᚊ": "Q",
+    "ᚋ": "M", "ᚌ": "G", "ᚍ": "NG", "ᚎ": "Z", "ᚏ": "R",
+    "ᚐ": "A", "ᚑ": "O", "ᚒ": "U", "ᚓ": "E", "ᚔ": "I",
+}
+
 
 def _render_strokes_as_synthetic(strokes, stem_p1, stem_p2):
     """Reconstruct a synthetic-style PNG from assisted-mode character strokes.
@@ -546,6 +556,17 @@ def build_html(stones, curation):
                         <img id="traced-image" src="" style="max-width:100%;max-height:100%" />
                     </div>
                 </div>
+                <div class="image-panel" id="synth-ref-panel" style="display:none; flex-direction:column">
+                    <div class="image-panel-label" style="background:#1b3a1b;color:#8aff8a">
+                        SYNTHETIC REFERENCE — match this style
+                    </div>
+                    <div class="image-container" style="flex:1; padding:6px; background:#0a1a0a; flex-direction:column; gap:6px">
+                        <div style="font-size:10px; color:#6a9";>Full-resolution target:</div>
+                        <img id="synth-ref-full" src="" style="max-width:100%; max-height:48%; object-fit:contain; background:#b4b4b4" />
+                        <div style="font-size:10px; color:#6a9">What the model will see (after 384×384 resize):</div>
+                        <img id="synth-ref-squashed" src="" style="max-width:100%; max-height:48%; object-fit:contain; background:#b4b4b4; image-rendering:pixelated" />
+                    </div>
+                </div>
                 <div class="divider" id="divider" style="display:none"></div>
                 <div class="image-panel" id="processed-panel" style="display:none">
                     <div class="image-panel-label">Processed</div>
@@ -745,6 +766,7 @@ def build_html(stones, curation):
                                 drawTraceOverlay();
                             }}
                         }});
+                    loadSynthReference();
                 }}, 50);
             }}
         }}
@@ -1029,6 +1051,8 @@ def build_html(stones, curation):
             document.getElementById('info-original-short').textContent =
                 edited !== s.transcription ? '(edited) orig: ' + s.transcription.slice(0, 20) + '...' : '';
             saveCuration();
+            // Refresh synthetic reference whenever the transcription changes
+            if (typeof loadSynthReference === 'function') loadSynthReference();
         }}
 
         function resetTranscription() {{
@@ -1249,11 +1273,29 @@ def build_html(stones, curation):
             traceCanvas.classList.toggle('active', traceMode);
             document.getElementById('keypad-column').classList.toggle('active', traceMode && traceSubMode === 'assisted');
             document.getElementById('traced-panel').style.display = traceMode ? 'flex' : 'none';
+            document.getElementById('synth-ref-panel').style.display = traceMode ? 'flex' : 'none';
             if (traceMode) {{
                 syncTraceCanvasSize();
                 resetTraceState();
                 drawTraceOverlay();
+                loadSynthReference();
             }}
+        }}
+
+        let synthRefDebounce = null;
+        function loadSynthReference() {{
+            const text = document.getElementById('info-transcription').value || '';
+            if (!traceMode) return;
+            clearTimeout(synthRefDebounce);
+            synthRefDebounce = setTimeout(() => {{
+                fetch('/synth-reference?text=' + encodeURIComponent(text))
+                    .then(r => r.json())
+                    .then(d => {{
+                        document.getElementById('synth-ref-full').src = d.full_url;
+                        document.getElementById('synth-ref-squashed').src = d.squashed_url;
+                    }})
+                    .catch(() => {{}});
+            }}, 400);
         }}
 
         function setTraceMode(mode) {{
@@ -1747,6 +1789,58 @@ class CurationHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self.send_response(404)
                 self.end_headers()
+
+        elif parsed.path == "/synth-reference":
+            import cv2
+            import numpy as np
+            import base64 as b64
+            params = parse_qs(parsed.query)
+            text = params.get("text", [""])[0]
+            keys = [_GLYPH_TO_KEY[c] for c in text if c in _GLYPH_TO_KEY]
+
+            if not keys:
+                placeholder = np.full((SYNTH_TARGET_HEIGHT, SYNTH_TARGET_HEIGHT, 3),
+                                      SYNTH_BG_RGB, dtype=np.uint8)
+                cv2.putText(placeholder, "enter transcription", (40, SYNTH_TARGET_HEIGHT // 2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (120, 120, 120), 2)
+                _, buf = cv2.imencode(".png", cv2.cvtColor(placeholder, cv2.COLOR_RGB2BGR))
+                png_bytes = buf.tobytes()
+                empty_url = "data:image/png;base64," + b64.b64encode(png_bytes).decode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "full_url": empty_url, "squashed_url": empty_url,
+                }).encode())
+                return
+
+            # Build synthetic strokes evenly spaced along a unit stem (t values 0..1)
+            strokes = [
+                {"kind": "char", "charKey": k, "t": (i + 0.5) / len(keys)}
+                for i, k in enumerate(keys)
+            ]
+            stem_p1 = {"x": 0.0, "y": 0.0}
+            stem_p2 = {"x": 1000.0, "y": 0.0}  # geometry irrelevant — renderer uses count + t
+
+            synth_png = _render_strokes_as_synthetic(strokes, stem_p1, stem_p2)
+
+            # Also produce the 384x384 squashed view that the model will actually see
+            arr = np.frombuffer(synth_png, dtype=np.uint8)
+            full_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            squashed = cv2.resize(full_img, (384, 384), interpolation=cv2.INTER_AREA)
+            _, squashed_buf = cv2.imencode(".png", squashed)
+
+            full_url = "data:image/png;base64," + b64.b64encode(synth_png).decode()
+            squashed_url = "data:image/png;base64," + b64.b64encode(squashed_buf.tobytes()).decode()
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "full_url": full_url,
+                "squashed_url": squashed_url,
+                "char_count": len(keys),
+            }).encode())
 
         elif parsed.path == "/trace-data":
             params = parse_qs(parsed.query)
