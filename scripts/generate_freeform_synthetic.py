@@ -119,11 +119,21 @@ def main():
     img_dir = out_dir / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
 
-    font_paths = sorted(str(p) for p in FONT_DIR.glob("*.ttf"))
+    # Exclude BabelStoneOghamBoundR — it auto-wraps inscriptions in feather-mark
+    # brackets (᚛ ᚜) that appear in rendered pixels but not in the label text,
+    # creating a training/label mismatch that teaches the model to hallucinate
+    # boundary glyphs on any inscription rendered with this font.
+    exclude_fonts = {"BabelStoneOghamBoundR.ttf"}
+    font_paths = sorted(
+        str(p) for p in FONT_DIR.glob("*.ttf")
+        if p.name not in exclude_fonts
+    )
     if not font_paths:
         print(f"No fonts found in {FONT_DIR}")
         sys.exit(1)
     print(f"Using {len(font_paths)} fonts from {FONT_DIR}")
+    if exclude_fonts:
+        print(f"Excluded (auto-bracket fonts): {sorted(exclude_fonts)}")
 
     random.seed(args.seed)
     sampler = OghamSequenceSampler(
