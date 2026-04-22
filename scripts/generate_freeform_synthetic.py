@@ -139,13 +139,35 @@ def main():
         writer = csv.writer(lf)
         writer.writerow(["image_file", "ogham_text", "latin_transliteration", "length", "severity"])
 
-        # Force the bg/stroke colours to match what the curator tool saves
-        # (traced/ images all have bg=(180,180,180) and strokes=(50,50,50)).
-        style_override = {"bg_color": TRACE_BG_RGB, "fg_color": TRACE_FG_RGB}
+        # Force the bg/stroke colours and a thick stemline to match what the
+        # curator tool saves (traced/ images all have bg=(180,180,180),
+        # strokes=(50,50,50), and consistent thick strokes).
+        style_override = {
+            "bg_color": TRACE_BG_RGB,
+            "fg_color": TRACE_FG_RGB,
+            "stemline_thickness": 6,
+        }
+
+        # Pre-augmentation thickening: dilate strokes so font-rendered
+        # character lines end up thicker, roughly matching real traced
+        # stroke widths. Kernel size controls how much thicker.
+        import cv2
+        import numpy as np
+        thicken_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 
         for i in range(args.num):
             text = sampler.sample()
             clean_img, _ = renderer.render(text, style_override=style_override)
+
+            # Thicken strokes (operate on inverse mask, then blend back)
+            # Gray the image, find dark pixels (strokes), dilate them.
+            gray = cv2.cvtColor(clean_img, cv2.COLOR_RGB2GRAY)
+            stroke_mask = (gray < 120).astype(np.uint8) * 255
+            thick_mask = cv2.dilate(stroke_mask, thicken_kernel, iterations=1)
+            # Rebuild the image with thickened strokes
+            thickened = np.full_like(clean_img, TRACE_BG_RGB)
+            thickened[thick_mask > 0] = TRACE_FG_RGB
+            clean_img = thickened
 
             # Apply freeform augmentations
             augmented = aug(image=clean_img)["image"]
