@@ -236,6 +236,96 @@ def _render_strokes_as_synthetic(strokes, stem_p1, stem_p2):
     return buf.tobytes()
 
 
+def _count_ogham_chars(text: str) -> int:
+    """Count only valid Ogham characters (ignoring spaces, punctuation, etc.)."""
+    return sum(1 for c in text if c in _GLYPH_TO_KEY)
+
+
+def _render_freeform_at_synthetic_density(image_data_url: str, n_chars: int) -> bytes:
+    """Re-space a freeform trace to synthetic character density.
+
+    Crops the user's alpha mask to stroke bounding box, scales to the synthetic
+    target height, then slices horizontally into `n_chars` equal parts. Each
+    slice is scaled to a 70px-wide target cell and concatenated, producing an
+    image that has the user's hand-drawn stroke shapes but with synthetic
+    character spacing. The model receives characters at the density it trained
+    on regardless of how far apart the user drew them.
+
+    Falls back to None if the inscription is empty; caller should then use
+    `_render_traced_to_synthetic` instead.
+    """
+    import cv2
+    import numpy as np
+    import base64 as b64
+
+    if n_chars < 1:
+        return None
+
+    png_bytes = b64.b64decode(image_data_url.split(",")[1])
+    arr = np.frombuffer(png_bytes, dtype=np.uint8)
+    img_rgba = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+    if img_rgba is None:
+        return None
+
+    if img_rgba.ndim == 3 and img_rgba.shape[-1] == 4:
+        alpha = img_rgba[..., 3]
+    else:
+        gray = cv2.cvtColor(img_rgba, cv2.COLOR_BGR2GRAY) if img_rgba.ndim == 3 else img_rgba
+        alpha = 255 - gray
+
+    ys, xs = np.where(alpha > 10)
+    if len(xs) == 0:
+        return None
+
+    x1, x2 = xs.min(), xs.max()
+    y1, y2 = ys.min(), ys.max()
+    pad = 8
+    x1 = max(0, x1 - pad)
+    y1 = max(0, y1 - pad)
+    x2 = min(alpha.shape[1] - 1, x2 + pad)
+    y2 = min(alpha.shape[0] - 1, y2 + pad)
+    cropped = alpha[y1:y2 + 1, x1:x2 + 1]
+    ch, cw = cropped.shape
+
+    # Scale to synthetic inner height preserving aspect
+    inner_h = SYNTH_TARGET_HEIGHT - 2 * SYNTH_PADDING
+    hscale = inner_h / ch
+    intermediate_w = max(1, int(round(cw * hscale)))
+    scaled = cv2.resize(cropped, (intermediate_w, inner_h), interpolation=cv2.INTER_AREA)
+
+    # Slice into n_chars equal-width parts, rescale each to 70px wide
+    char_width = 70
+    slice_w = intermediate_w / n_chars
+    out_inner_w = n_chars * char_width
+    out_w = out_inner_w + 2 * SYNTH_PADDING
+    out_h = SYNTH_TARGET_HEIGHT
+
+    out = np.full((out_h, out_w, 3), SYNTH_BG_RGB, dtype=np.uint8)
+    stroke = np.array(SYNTH_STROKE_RGB, dtype=np.uint8)
+
+    for i in range(n_chars):
+        src_start = int(round(i * slice_w))
+        src_end = int(round((i + 1) * slice_w))
+        src_end = min(src_end, intermediate_w)
+        if src_end <= src_start:
+            continue
+        slice_img = scaled[:, src_start:src_end]
+        if slice_img.shape[1] == 0:
+            continue
+        slice_resized = cv2.resize(slice_img, (char_width, inner_h), interpolation=cv2.INTER_AREA)
+
+        tx_start = SYNTH_PADDING + i * char_width
+        tx_end = tx_start + char_width
+        mask_norm = (slice_resized.astype(np.float32) / 255.0)[..., None]
+        roi = out[SYNTH_PADDING:SYNTH_PADDING + inner_h, tx_start:tx_end]
+        roi[:] = (roi.astype(np.float32) * (1 - mask_norm) +
+                  stroke.astype(np.float32) * mask_norm).astype(np.uint8)
+
+    out_bgr = cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
+    _, buf = cv2.imencode(".png", out_bgr)
+    return buf.tobytes()
+
+
 def _render_traced_to_synthetic(image_data_url: str) -> bytes:
     """Convert a transparent black-strokes PNG into a synthetic-style
     grey-background PNG matching the TrOCR training distribution.
@@ -1651,6 +1741,7 @@ def build_html(stones, curation):
             if (traceStrokes.length === 0 && !hasStem) {{ alert('Nothing to render'); return; }}
             const flat = flattenStrokesToCanvas();
             const imageData = flat.toDataURL('image/png');
+            const transcription = document.getElementById('info-transcription').value || '';
             fetch('/render-traced', {{
                 method: 'POST',
                 headers: {{'Content-Type': 'application/json'}},
@@ -1658,6 +1749,7 @@ def build_html(stones, curation):
                     image_data: imageData,
                     strokes: traceStrokes,
                     stem_p1: stemP1, stem_p2: stemP2,
+                    transcription: transcription,
                 }}),
             }}).then(r => r.json()).then(d => {{
                 if (d.ok) {{
@@ -1692,6 +1784,7 @@ def build_html(stones, curation):
             const synthFlat = flattenStrokesToCanvas();
             const overlay = buildOverlayComposite();
 
+            const transcriptionText = document.getElementById('info-transcription').value || '';
             fetch('/save-traced', {{
                 method: 'POST',
                 headers: {{'Content-Type': 'application/json'}},
@@ -1703,6 +1796,7 @@ def build_html(stones, curation):
                     strokes: traceStrokes,
                     sub_mode: traceSubMode,
                     stem_p1: stemP1, stem_p2: stemP2,
+                    transcription: transcriptionText,
                 }}),
             }}).then(r => r.json()).then(d => {{
                 if (d.ok) {{
@@ -1931,11 +2025,19 @@ class CurationHandler(http.server.BaseHTTPRequestHandler):
             data = json.loads(body)
             image_data = data["image_data"]
 
+            # Fallback chain:
+            #   1. Assisted-mode (structured char strokes + stem) → reconstruct
+            #   2. Freeform + transcription → equal-width slice to synthetic density
+            #   3. Pure freeform, no transcription → simple alpha-mask letterbox
             synth_png = _render_strokes_as_synthetic(
                 data.get("strokes", []),
                 data.get("stem_p1"),
                 data.get("stem_p2"),
             )
+            if synth_png is None:
+                n_chars = _count_ogham_chars(data.get("transcription", "") or "")
+                if n_chars > 0:
+                    synth_png = _render_freeform_at_synthetic_density(image_data, n_chars)
             if synth_png is None:
                 synth_png = _render_traced_to_synthetic(image_data)
             import base64 as b64
@@ -1959,14 +2061,19 @@ class CurationHandler(http.server.BaseHTTPRequestHandler):
             strokes = data.get("strokes", [])
             import base64 as b64
 
-            # (1) Synthetic-style render. If we have assisted-mode data (stem + char
-            # positions), reconstruct the inscription at synthetic density — this gives
-            # the model a much closer match to its training distribution than scaling
-            # the user's wide canvas down. Fall back to the alpha-mask render for
-            # pure freeform traces.
+            # (1) Synthetic-style render. Fallback chain:
+            #     a. Assisted mode (char strokes + stem) → reconstruct at synthetic density
+            #     b. Freeform with transcription → equal-width slice into n_chars, each cell
+            #        rescaled to synthetic char-width. Preserves user's stroke shapes while
+            #        normalising density.
+            #     c. Pure freeform, no transcription → alpha-mask letterbox (fallback)
             synth_png = _render_strokes_as_synthetic(strokes,
                                                      data.get("stem_p1"),
                                                      data.get("stem_p2"))
+            if synth_png is None:
+                n_chars = _count_ogham_chars(data.get("transcription", "") or "")
+                if n_chars > 0:
+                    synth_png = _render_freeform_at_synthetic_density(image_data, n_chars)
             if synth_png is None:
                 synth_png = _render_traced_to_synthetic(image_data)
 
