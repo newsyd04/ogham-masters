@@ -119,18 +119,20 @@ def main():
     img_dir = out_dir / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
 
-    # Exclude fonts that break label-pixel consistency:
+    # Exclude fonts that break label-pixel consistency or render
+    # inconsistently across characters:
     #   - BabelStoneOghamBoundR: auto-wraps inscriptions in feather-mark
     #     brackets (᚛ ᚜) that aren't part of the label text.
-    #   - BabelStoneOghamI: italic variant that renders ALL strokes diagonally,
-    #     collapsing the angle-based distinction between B-aicme (perpendicular
-    #     below), H-aicme (perpendicular above), and M-aicme (diagonal across).
-    #     Using it as training data would actively teach the model that stroke
-    #     angle is irrelevant, when it's the primary feature distinguishing
-    #     M-aicme characters from B/H-aicme ones.
+    #   - BabelStoneOghamI: italic variant that renders ALL strokes
+    #     diagonally, collapsing the angle-based distinction between
+    #     B/H-aicme (perpendicular) and M-aicme (diagonal).
+    #   - NotoSansOgham-Regular: rendering style differs from BabelStone
+    #     (single-stroke glyphs render inconsistently with the rest of
+    #     the training set). Excluded after visual inspection.
     exclude_fonts = {
         "BabelStoneOghamBoundR.ttf",
         "BabelStoneOghamI.ttf",
+        "NotoSansOgham-Regular.ttf",
     }
     font_paths = sorted(
         str(p) for p in FONT_DIR.glob("*.ttf")
