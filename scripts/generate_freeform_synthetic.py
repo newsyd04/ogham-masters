@@ -131,7 +131,19 @@ def main():
         max_length=args.max_len,
         seed=args.seed,
     )
-    renderer = OghamRenderer(font_paths=font_paths, seed=args.seed)
+    # Renderer tweaks to address aicme-confusion failures seen in Phase 2 eval:
+    #   - char_height_range (50, 80) — taller strokes so above/below/notch
+    #     spatial distinction survives the processor's 384x384 square resize
+    #     (#4 vertical exaggeration)
+    #   - stemline_thickness_range (4, 8) — varies per sample, some with more
+    #     emphasis on the stem line to teach aicme discrimination under noise
+    #     (#1 thicker stem, partial — no explicit gap without geometric rendering)
+    renderer = OghamRenderer(
+        font_paths=font_paths,
+        char_height_range=(50, 80),
+        stemline_thickness_range=(4, 8),
+        seed=args.seed,
+    )
     aug = build_freeform_augmenter(args.severity)
 
     labels_path = out_dir / "labels.csv"
@@ -139,13 +151,13 @@ def main():
         writer = csv.writer(lf)
         writer.writerow(["image_file", "ogham_text", "latin_transliteration", "length", "severity"])
 
-        # Force the bg/stroke colours to match what the curator tool saves.
-        # stemline_thickness=4 is mid-range (training used 2-6); thinner than
-        # before so it doesn't dominate the image.
+        # Force bg/stroke colours to match curator output. Leave
+        # stemline_thickness unset so it samples randomly from the (4, 8) range
+        # configured on the renderer — gives the model varied stem emphasis
+        # per sample rather than a single fixed thickness.
         style_override = {
             "bg_color": TRACE_BG_RGB,
             "fg_color": TRACE_FG_RGB,
-            "stemline_thickness": 4,
         }
 
         # No full-mask dilation — it was merging adjacent strokes within
