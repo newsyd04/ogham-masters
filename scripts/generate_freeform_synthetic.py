@@ -33,6 +33,12 @@ from src.utils.ogham import ogham_to_latin
 
 FONT_DIR = PROJECT_ROOT / "data" / "fonts"
 
+# Match the exact colours the curate_dataset.py render pipeline uses, so
+# Phase 2 training on this data transfers cleanly to evaluation on real
+# traced images. #b4b4b4 background + dark-grey strokes.
+TRACE_BG_RGB = (180, 180, 180)
+TRACE_FG_RGB = (50, 50, 50)
+
 
 def build_freeform_augmenter(severity: str = "medium"):
     """Albumentations pipeline tuned to mimic hand-drawn Ogham traces.
@@ -58,15 +64,25 @@ def build_freeform_augmenter(severity: str = "medium"):
         blur_sigma = (0.7, 1.8)
         rotate_deg = 2.0
 
+    # Fill any border created by elastic warp / rotation with the trace grey
+    # so background stays uniformly #b4b4b4 across the whole image.
+    border_value = (180, 180, 180)
+
     return A.Compose([
         A.ElasticTransform(
             alpha=elastic_alpha,
             sigma=elastic_sigma,
-            border_mode=cv2.BORDER_REFLECT_101,
+            border_mode=cv2.BORDER_CONSTANT,
+            value=border_value,
             p=1.0,
         ),
         A.GaussianBlur(blur_limit=(3, 5), sigma_limit=blur_sigma, p=0.8),
-        A.Rotate(limit=rotate_deg, border_mode=cv2.BORDER_REFLECT_101, p=0.7),
+        A.Rotate(
+            limit=rotate_deg,
+            border_mode=cv2.BORDER_CONSTANT,
+            value=border_value,
+            p=0.7,
+        ),
         A.RandomBrightnessContrast(
             brightness_limit=0.08, contrast_limit=0.12, p=0.6
         ),
@@ -123,9 +139,13 @@ def main():
         writer = csv.writer(lf)
         writer.writerow(["image_file", "ogham_text", "latin_transliteration", "length", "severity"])
 
+        # Force the bg/stroke colours to match what the curator tool saves
+        # (traced/ images all have bg=(180,180,180) and strokes=(50,50,50)).
+        style_override = {"bg_color": TRACE_BG_RGB, "fg_color": TRACE_FG_RGB}
+
         for i in range(args.num):
             text = sampler.sample()
-            clean_img, _ = renderer.render(text)
+            clean_img, _ = renderer.render(text, style_override=style_override)
 
             # Apply freeform augmentations
             augmented = aug(image=clean_img)["image"]
