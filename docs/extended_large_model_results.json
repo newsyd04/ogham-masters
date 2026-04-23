@@ -1,0 +1,59 @@
+{
+  "_notes": [
+    "GPT-4o: valid evaluation — model returned Ogham Unicode predictions, but hallucinated common genealogical formulae (e.g. CATTUBUTTAS-MAQI-MUCOI-CORBBI) irrespective of input content. CER >100% on freeform because predictions were longer than references.",
+    "Claude: all API calls returned 404 (invalid model name). Numbers below are placeholders; re-run required with a valid claude-sonnet-4-5 or similar model identifier.",
+    "Gemini: all API calls returned 404 (invalid model name). Numbers below are placeholders; re-run required with gemini-2.5-flash or similar valid endpoint."
+  ],
+  "synth_clean": {
+    "gpt4o_few_shot": {
+      "aggregate": {
+        "n_samples": 30,
+        "mean_cer_no_sp_pct": 102.71,
+        "exact_match_pct": 0.0,
+        "status": "valid_eval"
+      }
+    },
+    "claude_few_shot": {
+      "aggregate": {
+        "n_samples": 30,
+        "mean_cer_no_sp_pct": 100.0,
+        "exact_match_pct": 0.0,
+        "status": "API_ERROR_placeholder"
+      }
+    },
+    "gemini_few_shot": {
+      "aggregate": {
+        "n_samples": 30,
+        "mean_cer_no_sp_pct": 100.0,
+        "exact_match_pct": 0.0,
+        "status": "API_ERROR_placeholder"
+      }
+    }
+  },
+  "synth_freeform": {
+    "gpt4o_few_shot": {
+      "aggregate": {
+        "n_samples": 35,
+        "mean_cer_no_sp_pct": 141.57,
+        "exact_match_pct": 0.0,
+        "status": "valid_eval"
+      }
+    },
+    "claude_few_shot": {
+      "aggregate": {
+        "n_samples": 35,
+        "mean_cer_no_sp_pct": 100.0,
+        "exact_match_pct": 0.0,
+        "status": "API_ERROR_placeholder"
+      }
+    },
+    "gemini_few_shot": {
+      "aggregate": {
+        "n_samples": 35,
+        "mean_cer_no_sp_pct": 100.0,
+        "exact_match_pct": 0.0,
+        "status": "API_ERROR_placeholder"
+      }
+    }
+  }
+}

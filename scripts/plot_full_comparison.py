@@ -49,6 +49,9 @@ EXTENDED_LM_RESULTS = {
                             "freeform_cer": None, "freeform_exact": None},
 }
 
+# Track API-error placeholders separately so we can annotate them in charts
+EXTENDED_LM_STATUS = {}
+
 # Try to auto-load from Drive-path-style export if present
 EXTENDED_JSON_LOCAL = DOCS / "extended_large_model_results.json"
 if EXTENDED_JSON_LOCAL.exists():
@@ -65,48 +68,72 @@ if EXTENDED_JSON_LOCAL.exists():
         if ff:
             EXTENDED_LM_RESULTS[disp_name]["freeform_cer"] = ff.get("mean_cer_no_sp_pct")
             EXTENDED_LM_RESULTS[disp_name]["freeform_exact"] = ff.get("exact_match_pct")
+            EXTENDED_LM_STATUS.setdefault(disp_name, {})["freeform_status"] = ff.get("status", "valid_eval")
         if sy:
             EXTENDED_LM_RESULTS[disp_name]["synth_cer"] = sy.get("mean_cer_no_sp_pct")
             EXTENDED_LM_RESULTS[disp_name]["synth_exact"] = sy.get("exact_match_pct")
+            EXTENDED_LM_STATUS.setdefault(disp_name, {})["synth_status"] = sy.get("status", "valid_eval")
     print(f"Loaded extended large-model results from {EXTENDED_JSON_LOCAL}")
 else:
     print(f"(Extended LM results not found at {EXTENDED_JSON_LOCAL} — "
           f"download from Drive after running notebook 05 cells)")
 
 
+def _status_for(model_name, split_key):
+    """Return API-error annotation label if this cell was a placeholder."""
+    st = EXTENDED_LM_STATUS.get(model_name, {}).get(split_key)
+    if st and st != "valid_eval":
+        return "API error"
+    return None
+
+
 def chart_phase1_comparison():
     """Bar chart: all models' CER on clean synthetic."""
     models = [
-        ("TrOCR-small\n(fine-tuned)", phase2_data["models"]["trocr_small"]["phase1_synth_cer_pct"], "#2ca02c"),
-        ("PARSeq\n(fine-tuned)",      phase2_data["models"]["parseq"]["phase1_synth_cer_pct"],       "#ff7f0e"),
-        ("CNN+RNN\n(fine-tuned)",     phase2_data["models"]["cnn_rnn"]["phase1_synth_cer_pct"],      "#d62728"),
+        ("TrOCR-small\n(fine-tuned)", phase2_data["models"]["trocr_small"]["phase1_synth_cer_pct"], "#2ca02c", None),
+        ("PARSeq\n(fine-tuned)",      phase2_data["models"]["parseq"]["phase1_synth_cer_pct"],       "#ff7f0e", None),
+        ("CNN+RNN\n(fine-tuned)",     phase2_data["models"]["cnn_rnn"]["phase1_synth_cer_pct"],      "#d62728", None),
     ]
-    # Add large models if measurements exist
     for name, vals in EXTENDED_LM_RESULTS.items():
         if vals["synth_cer"] is not None:
-            models.append((name, vals["synth_cer"], "#7f7f7f"))
-    # TrOCR unfinetuned floor for context
-    models.append(("TrOCR-small\n(unfinetuned)", 100.12, "#999999"))
+            status = _status_for(name, "synth_status")
+            models.append((name, vals["synth_cer"], "#7f7f7f", status))
+    models.append(("TrOCR-small\n(unfinetuned)", 100.12, "#999999", None))
 
     labels = [m[0] for m in models]
     cers = [m[1] for m in models]
     colors = [m[2] for m in models]
+    statuses = [m[3] for m in models]
 
-    fig, ax = plt.subplots(figsize=(11, 6))
-    bars = ax.bar(range(len(labels)), cers, color=colors, edgecolor="black")
+    # Cap display at 110 for visual clarity; annotate bars that exceed
+    display_cers = [min(c, 110) for c in cers]
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    bars = ax.bar(range(len(labels)), display_cers, color=colors, edgecolor="black")
+    # Stripe pattern for API-errored bars
+    for bar, status in zip(bars, statuses):
+        if status == "API error":
+            bar.set_hatch("///")
+            bar.set_alpha(0.6)
+
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, fontsize=9, rotation=0)
     ax.set_ylabel("Character Error Rate (%)", fontsize=11)
     ax.set_title("Phase 1 comparison — CER on clean synthetic Ogham test set",
                  fontsize=13, pad=12)
-    ax.set_ylim(0, 110)
+    ax.set_ylim(0, 115)
     ax.grid(axis="y", alpha=0.3, linestyle="--")
     ax.axhline(100, linestyle=":", color="red", alpha=0.5)
 
-    for bar, cer in zip(bars, cers):
+    for bar, cer, status in zip(bars, cers, statuses):
         h = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width() / 2, h + 1,
-                f"{cer:.2f}%", ha="center", va="bottom", fontsize=9)
+        label_top = f"{cer:.2f}%" if cer <= 110 else f"{cer:.2f}%↑"
+        ax.text(bar.get_x() + bar.get_width() / 2, h + 1.5, label_top,
+                ha="center", va="bottom", fontsize=9)
+        if status == "API error":
+            ax.text(bar.get_x() + bar.get_width() / 2, h / 2, "API\nerror",
+                    ha="center", va="center", fontsize=9, color="white",
+                    fontweight="bold", rotation=90)
 
     plt.tight_layout()
     out = FIGURES / "phase1_full_comparison.png"
@@ -116,15 +143,16 @@ def chart_phase1_comparison():
 
 
 def chart_phase2_comparison():
-    """Bar chart: all models' CER on synth-freeform test."""
+    """Bar chart: all models' CER on freeform trace test."""
     models = [
-        ("TrOCR-small",    phase2_data["models"]["trocr_small"]["post_p2_freeform_cer_pct"], "#2ca02c"),
-        ("PARSeq",         phase2_data["models"]["parseq"]["post_p2_freeform_cer_pct"],       "#ff7f0e"),
-        ("CNN+RNN",        phase2_data["models"]["cnn_rnn"]["post_p2_freeform_cer_pct"],      "#d62728"),
+        ("TrOCR-small",    phase2_data["models"]["trocr_small"]["post_p2_freeform_cer_pct"], "#2ca02c", None),
+        ("PARSeq",         phase2_data["models"]["parseq"]["post_p2_freeform_cer_pct"],       "#ff7f0e", None),
+        ("CNN+RNN",        phase2_data["models"]["cnn_rnn"]["post_p2_freeform_cer_pct"],      "#d62728", None),
     ]
     for name, vals in EXTENDED_LM_RESULTS.items():
         if vals["freeform_cer"] is not None:
-            models.append((name, vals["freeform_cer"], "#7f7f7f"))
+            status = _status_for(name, "freeform_status")
+            models.append((name, vals["freeform_cer"], "#7f7f7f", status))
 
     if not any(vals["freeform_cer"] is not None for vals in EXTENDED_LM_RESULTS.values()):
         print("  (Phase 2 chart: no large-model numbers yet — showing fine-tuned only)")
@@ -132,21 +160,34 @@ def chart_phase2_comparison():
     labels = [m[0] for m in models]
     cers = [m[1] for m in models]
     colors = [m[2] for m in models]
+    statuses = [m[3] for m in models]
+    display_cers = [min(c, 150) for c in cers]
 
-    fig, ax = plt.subplots(figsize=(11, 6))
-    bars = ax.bar(range(len(labels)), cers, color=colors, edgecolor="black")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    bars = ax.bar(range(len(labels)), display_cers, color=colors, edgecolor="black")
+    for bar, status in zip(bars, statuses):
+        if status == "API error":
+            bar.set_hatch("///")
+            bar.set_alpha(0.6)
+
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, fontsize=9, rotation=15, ha="right")
     ax.set_ylabel("Character Error Rate (%)", fontsize=11)
     ax.set_title("Phase 2 comparison — CER on synthetic-freeform test set",
                  fontsize=13, pad=12)
-    ax.set_ylim(0, 110)
+    ax.set_ylim(0, 160)
     ax.grid(axis="y", alpha=0.3, linestyle="--")
+    ax.axhline(100, linestyle=":", color="red", alpha=0.5, label="100% CER floor")
 
-    for bar, cer in zip(bars, cers):
+    for bar, cer, status in zip(bars, cers, statuses):
         h = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width() / 2, h + 1,
-                f"{cer:.2f}%", ha="center", va="bottom", fontsize=9)
+        label_top = f"{cer:.2f}%"
+        ax.text(bar.get_x() + bar.get_width() / 2, h + 1.5, label_top,
+                ha="center", va="bottom", fontsize=9)
+        if status == "API error":
+            ax.text(bar.get_x() + bar.get_width() / 2, h / 2, "API\nerror",
+                    ha="center", va="center", fontsize=9, color="white",
+                    fontweight="bold", rotation=90)
 
     plt.tight_layout()
     out = FIGURES / "phase2_full_comparison.png"
