@@ -29,7 +29,8 @@ DATA = {
     "metric_note": (
         "CER computed on Ogham character sequences with whitespace excluded; "
         "all results on the same held-out 35-sample test split (seed 42) of "
-        "the 350-sample synthetic-freeform dataset."
+        "the 350-sample synthetic-freeform dataset. Phase 1 exact-match on "
+        "5000-sample synthetic validation set from DaraTraining/ogham-synthetic-200k."
     ),
     "models": {
         "trocr_small": {
@@ -37,6 +38,7 @@ DATA = {
             "architecture": "Attention (TrOCR encoder + RoBERTa decoder)",
             "params_M": 61.6,
             "phase1_synth_cer_pct": 0.06,
+            "phase1_synth_exact_pct": 99.8,
             "pre_p2_freeform_cer_pct": 14.34,
             "post_p2_freeform_cer_pct": 1.34,
             "pre_p2_freeform_exact_pct": 40.0,
@@ -48,6 +50,7 @@ DATA = {
             "architecture": "Attention (ViT + Permutation-LM decoder)",
             "params_M": 23.8,
             "phase1_synth_cer_pct": 8.96,
+            "phase1_synth_exact_pct": 72.2,
             "pre_p2_freeform_cer_pct": 37.90,
             "post_p2_freeform_cer_pct": 29.17,
             "pre_p2_freeform_exact_pct": 34.3,
@@ -59,6 +62,7 @@ DATA = {
             "architecture": "CTC (ResNet-18 + BiLSTM)",
             "params_M": 12.5,
             "phase1_synth_cer_pct": 66.82,
+            "phase1_synth_exact_pct": 24.8,
             "pre_p2_freeform_cer_pct": 68.58,
             "post_p2_freeform_cer_pct": 67.24,
             "pre_p2_freeform_exact_pct": 14.3,
