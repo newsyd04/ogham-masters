@@ -1,8 +1,12 @@
 {
   "_notes": [
-    "GPT-4o: valid evaluation — model returned Ogham Unicode predictions, but hallucinated common genealogical formulae (e.g. CATTUBUTTAS-MAQI-MUCOI-CORBBI) irrespective of input content. CER >100% on freeform because predictions were longer than references.",
-    "Claude: all API calls returned 404 (invalid model name). Numbers below are placeholders; re-run required with a valid claude-sonnet-4-5 or similar model identifier.",
-    "Gemini: all API calls returned 404 (invalid model name). Numbers below are placeholders; re-run required with gemini-2.5-flash or similar valid endpoint."
+    "All three LLMs ran successfully with few-shot prompting on both clean synthetic (30 samples) and synthetic-freeform (35 samples) test sets.",
+    "Dominant failure mode across all three: models emit valid Ogham Unicode characters but hallucinate common genealogical formulae (CATTUBUTTAS-MAQI-MUCOI-CORBBI) learned from the few-shot examples, regardless of actual image content.",
+    "GPT-4o: most consistent hallucinator — produced identical MAQI-formula outputs across varied test images.",
+    "Claude: similar failure, slightly more diverse outputs. 90.64% CER on synth / 109% on freeform.",
+    "Gemini: most varied outputs including some forfeda characters (ᚖ) and dots. 110% synth / 85.63% freeform.",
+    "CER > 100% indicates predictions are longer than references (hallucinated extra characters).",
+    "0% exact match across all three models on both test sets — not a single inscription correctly transcribed in 195 total LLM inferences."
   ],
   "synth_clean": {
     "gpt4o_few_shot": {
@@ -16,17 +20,17 @@
     "claude_few_shot": {
       "aggregate": {
         "n_samples": 30,
-        "mean_cer_no_sp_pct": 100.0,
+        "mean_cer_no_sp_pct": 90.64,
         "exact_match_pct": 0.0,
-        "status": "API_ERROR_placeholder"
+        "status": "valid_eval"
       }
     },
     "gemini_few_shot": {
       "aggregate": {
         "n_samples": 30,
-        "mean_cer_no_sp_pct": 100.0,
+        "mean_cer_no_sp_pct": 110.10,
         "exact_match_pct": 0.0,
-        "status": "API_ERROR_placeholder"
+        "status": "valid_eval"
       }
     }
   },
@@ -42,17 +46,17 @@
     "claude_few_shot": {
       "aggregate": {
         "n_samples": 35,
-        "mean_cer_no_sp_pct": 100.0,
+        "mean_cer_no_sp_pct": 109.00,
         "exact_match_pct": 0.0,
-        "status": "API_ERROR_placeholder"
+        "status": "valid_eval"
       }
     },
     "gemini_few_shot": {
       "aggregate": {
         "n_samples": 35,
-        "mean_cer_no_sp_pct": 100.0,
+        "mean_cer_no_sp_pct": 85.63,
         "exact_match_pct": 0.0,
-        "status": "API_ERROR_placeholder"
+        "status": "valid_eval"
       }
     }
   }
