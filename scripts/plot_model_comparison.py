@@ -71,12 +71,12 @@ parseq_exact = [
     70.8, 71.6, 72.1, 72.1, 72.2,
 ]
 
-# Large models (single point, not epoch-based)
+# Large models — Phase 1 clean-synth (30 samples, few-shot prompting).
+# Source: docs/extended_large_model_results.json
 large_models = {
-    "GPT-4o\n(zero-shot)": 98.22,
-    "GPT-4o\n(few-shot)": 93.23,
-    "Claude\n(zero-shot)": 97.33,
-    "Claude\n(few-shot)": 80.07,
+    "GPT-4o\n(few-shot)": 102.71,
+    "Claude\n(few-shot)": 90.64,
+    "Gemini\n(few-shot)": 110.10,
 }
 
 plt.style.use("seaborn-v0_8-whitegrid")
@@ -141,21 +141,19 @@ print(f"Saved: {output_dir / 'model_comparison_exact_match.png'}")
 fig, ax = plt.subplots(figsize=(12, 5))
 
 all_models = {
-    "TrOCR-small\nunfrozen": 0.06,
-    "TrOCR-small\nfrozen": 0.14,
-    "PARSeq": 8.96,
-    "CNN+RNN\n(CTC)": 66.82,
-    "Claude\n(few-shot)": 80.07,
-    "TrOCR-base": 90.43,
-    "GPT-4o\n(few-shot)": 93.23,
-    "Claude\n(zero-shot)": 97.33,
-    "GPT-4o\n(zero-shot)": 98.22,
-    "TrOCR-small\nUNTRAINED": 100.12,
+    "TrOCR-small\nunfrozen":      0.06,
+    "TrOCR-small\nfrozen":        0.14,
+    "PARSeq":                     8.96,
+    "CNN+RNN\n(CTC)":             66.82,
+    "TrOCR-small\nUNTRAINED":   100.12,
+    "GPT-4o\n(few-shot)":       102.71,
+    "Claude\n(few-shot)":        90.64,
+    "Gemini\n(few-shot)":       110.10,
 }
 
 model_colors = [
     colors["unfrozen"], colors["frozen"], colors["parseq"], colors["cnn_rnn"],
-    colors["large"], "#03A9F4", colors["large"], colors["large"], colors["large"], "#BDBDBD",
+    "#BDBDBD", colors["large"], colors["large"], colors["large"],
 ]
 
 bars = ax.bar(all_models.keys(), all_models.values(), color=model_colors, edgecolor="white", linewidth=0.5)
@@ -170,13 +168,83 @@ for bar, val in zip(bars, all_models.values()):
                 f"{val:.1f}%", ha="center", va="top", fontsize=9, fontweight="bold", color="white")
 
 ax.set_ylabel("Character Error Rate (%)")
-ax.set_title("Final CER Comparison — All Models", fontsize=14, fontweight="bold")
-ax.set_ylim(0, 105)
+ax.set_title("Phase 1 — CER on clean synthetic Ogham",
+             fontsize=14, fontweight="bold")
+ax.axhline(100, linestyle=":", color="red", alpha=0.4)
+ax.set_ylim(0, 120)
 
 plt.tight_layout()
 plt.savefig(output_dir / "model_comparison_bar.png", dpi=150, bbox_inches="tight")
 plt.close()
 print(f"Saved: {output_dir / 'model_comparison_bar.png'}")
+
+
+# === Figure 3b: Phase 2 bar chart — same style, synthetic-freeform test ===
+fig, ax = plt.subplots(figsize=(12, 5))
+
+# Phase 2 post-curriculum CER on the 35-sample freeform test split.
+# Large models: few-shot freeform eval from docs/extended_large_model_results.json.
+phase2_models = {
+    "TrOCR-small\n(phase 2)":     1.34,
+    "PARSeq\n(phase 2)":         29.17,
+    "CNN+RNN\n(phase 2)":        67.24,
+    "GPT-4o\n(few-shot)":       141.57,
+    "Claude\n(few-shot)":       109.00,
+    "Gemini\n(few-shot)":        85.63,
+}
+
+phase2_colors = [
+    colors["unfrozen"], colors["parseq"], colors["cnn_rnn"],
+    colors["large"], colors["large"], colors["large"],
+]
+
+YMAX = 160  # give headroom for GPT-4o 141.57
+bars = ax.bar(phase2_models.keys(), phase2_models.values(),
+              color=phase2_colors, edgecolor="white", linewidth=0.5)
+
+for bar, val in zip(bars, phase2_models.values()):
+    if val < 5:
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 2.5,
+                f"{val:.2f}%", ha="center", va="bottom", fontsize=9, fontweight="bold")
+    else:
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() - 6,
+                f"{val:.1f}%", ha="center", va="top", fontsize=9,
+                fontweight="bold", color="white")
+
+ax.set_ylabel("Character Error Rate (%)")
+ax.set_title("Phase 2 — CER on freeform trace",
+             fontsize=14, fontweight="bold")
+ax.axhline(100, linestyle=":", color="red", alpha=0.4)
+ax.set_ylim(0, YMAX)
+
+plt.tight_layout()
+plt.savefig(output_dir / "model_comparison_bar_phase2.png", dpi=150, bbox_inches="tight")
+plt.close()
+print(f"Saved: {output_dir / 'model_comparison_bar_phase2.png'}")
+
+
+# === Figure 3c: Phase 2 log-scale bar ===
+fig, ax = plt.subplots(figsize=(12, 5))
+
+ax.bar(phase2_models.keys(), phase2_models.values(),
+       color=phase2_colors, edgecolor="white", linewidth=0.5)
+
+for bar, val in zip(ax.patches, phase2_models.values()):
+    y_pos = val * 1.15
+    ax.text(bar.get_x() + bar.get_width()/2, y_pos,
+            f"{val:.2f}%" if val < 1 else f"{val:.1f}%",
+            ha="center", va="bottom", fontsize=9, fontweight="bold")
+
+ax.set_ylabel("Character Error Rate (%, log scale)")
+ax.set_title("Phase 2 — CER on freeform trace (log scale)",
+             fontsize=14, fontweight="bold")
+ax.set_yscale("log")
+ax.set_ylim(0.5, 300)
+
+plt.tight_layout()
+plt.savefig(output_dir / "model_comparison_bar_phase2_log.png", dpi=150, bbox_inches="tight")
+plt.close()
+print(f"Saved: {output_dir / 'model_comparison_bar_phase2_log.png'}")
 
 # === Figure 4: Log-scale CER bar (to show TrOCR detail) ===
 fig, ax = plt.subplots(figsize=(12, 5))
@@ -190,7 +258,8 @@ for bar, val in zip(ax.patches, all_models.values()):
             ha="center", va="bottom", fontsize=9, fontweight="bold")
 
 ax.set_ylabel("Character Error Rate (%, log scale)")
-ax.set_title("Final CER Comparison — Log Scale", fontsize=14, fontweight="bold")
+ax.set_title("Phase 1 — CER on clean synthetic Ogham (log scale)",
+             fontsize=14, fontweight="bold")
 ax.set_yscale("log")
 ax.set_ylim(0.01, 200)
 

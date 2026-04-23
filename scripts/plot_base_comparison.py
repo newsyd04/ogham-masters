@@ -148,30 +148,60 @@ plt.savefig(output_dir / "base_vs_small_val_loss.png", dpi=150, bbox_inches="tig
 plt.close()
 print(f"Saved: {output_dir / 'base_vs_small_val_loss.png'}")
 
-# === Figure 5: Final summary bar chart ===
+# === Figure 5a: Phase 1 — best CER by model size ===
+# Architectures ordered by parameter count (smallest → largest).
+# Phase 1 = trained on 200k clean synthetic. Source: docs/phase2_comparison.json
 fig, ax = plt.subplots(figsize=(10, 5))
 
-models = ["TrOCR-small\nunfrozen\n(62M)", "TrOCR-base\nbatch=16\n(385M)", "TrOCR-base\nbatch=64\n(385M)", "CNN+RNN\n(15M)"]
-best_cers = [0.06, 90.43, 28.55, 66.82]
-bar_colors = [colors["small"], colors["base_b16"], colors["base_b64"], colors["cnn_rnn"]]
+size_models_p1 = ["CNN+RNN\n(12.5M)", "PARSeq\n(23.8M)", "TrOCR-small\n(61.6M)"]
+size_cer_p1 = [66.82, 8.96, 0.06]
+size_bar_colors = [colors["cnn_rnn"], "#4CAF50", colors["small"]]
 
-bars = ax.bar(models, best_cers, color=bar_colors, edgecolor="white", linewidth=0.5)
-
-for bar, val in zip(bars, best_cers):
+bars = ax.bar(size_models_p1, size_cer_p1, color=size_bar_colors,
+              edgecolor="white", linewidth=0.5)
+for bar, val in zip(bars, size_cer_p1):
     if val < 5:
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 2,
                 f"{val:.2f}%", ha="center", va="bottom", fontsize=11, fontweight="bold")
     else:
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() - 4,
-                f"{val:.1f}%", ha="center", va="top", fontsize=11, fontweight="bold", color="white")
+                f"{val:.1f}%", ha="center", va="top", fontsize=11,
+                fontweight="bold", color="white")
 
 ax.set_ylabel("Best CER (%)")
-ax.set_title("Best CER by Model Size — Bigger Is Not Better", fontsize=14, fontweight="bold")
-ax.set_ylim(0, 115)
+ax.set_title("Phase 1 — Best CER by model size", fontsize=14, fontweight="bold")
+ax.set_ylim(0, 80)
 
 plt.tight_layout()
 plt.savefig(output_dir / "model_size_cer_bar.png", dpi=150, bbox_inches="tight")
 plt.close()
 print(f"Saved: {output_dir / 'model_size_cer_bar.png'}")
+
+# === Figure 5b: Phase 2 — best CER by model size ===
+# After curriculum fine-tune on 350 synthetic-freeform samples.
+fig, ax = plt.subplots(figsize=(10, 5))
+
+size_models_p2 = ["CNN+RNN\n(12.5M)", "PARSeq\n(23.8M)", "TrOCR-small\n(61.6M)"]
+size_cer_p2 = [67.24, 29.17, 1.34]
+
+bars = ax.bar(size_models_p2, size_cer_p2, color=size_bar_colors,
+              edgecolor="white", linewidth=0.5)
+for bar, val in zip(bars, size_cer_p2):
+    if val < 5:
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 2,
+                f"{val:.2f}%", ha="center", va="bottom", fontsize=11, fontweight="bold")
+    else:
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() - 4,
+                f"{val:.1f}%", ha="center", va="top", fontsize=11,
+                fontweight="bold", color="white")
+
+ax.set_ylabel("Best CER (%)")
+ax.set_title("Phase 2 — Best CER by model size", fontsize=14, fontweight="bold")
+ax.set_ylim(0, 80)
+
+plt.tight_layout()
+plt.savefig(output_dir / "model_size_cer_bar_phase2.png", dpi=150, bbox_inches="tight")
+plt.close()
+print(f"Saved: {output_dir / 'model_size_cer_bar_phase2.png'}")
 
 print("\nAll base vs small comparison charts saved to docs/figures/")

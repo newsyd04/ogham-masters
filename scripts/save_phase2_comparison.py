@@ -151,7 +151,7 @@ def chart_pre_vs_post():
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=11)
-    ax.set_ylabel("CER on held-out synthetic-freeform test (%)", fontsize=11)
+    ax.set_ylabel("CER on freeform trace (%)", fontsize=11)
     ax.set_title("Phase 2 fine-tuning impact across architectures", fontsize=13, pad=12)
     ax.legend(loc="upper left", fontsize=10)
     ax.grid(axis="y", alpha=0.3, linestyle="--")
@@ -268,7 +268,7 @@ def chart_combined():
     ax2.set_ylim(-1, 15)
 
     fig.suptitle(
-        "Phase 2 fine-tuning across OCR architectures on synthetic-freeform Ogham",
+        "Phase 2 fine-tuning across OCR architectures on freeform trace",
         fontsize=13, fontweight="bold", y=1.02,
     )
     plt.tight_layout()

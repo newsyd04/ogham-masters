@@ -90,16 +90,16 @@ def _status_for(model_name, split_key):
 def chart_phase1_comparison():
     """Bar chart: all models' CER on clean synthetic."""
     models = [
-        ("TrOCR-small\n(frozen enc)",   0.14,                                                            "#a0d6a0", None),
         ("TrOCR-small\n(unfrozen)",     phase2_data["models"]["trocr_small"]["phase1_synth_cer_pct"],   "#2ca02c", None),
+        ("TrOCR-small\n(frozen enc)",   0.14,                                                            "#a0d6a0", None),
         ("PARSeq\n(fine-tuned)",        phase2_data["models"]["parseq"]["phase1_synth_cer_pct"],        "#ff7f0e", None),
         ("CNN+RNN\n(fine-tuned)",       phase2_data["models"]["cnn_rnn"]["phase1_synth_cer_pct"],       "#d62728", None),
+        ("TrOCR-small\n(unfinetuned)",  100.12,                                                          "#999999", None),
     ]
     for name, vals in EXTENDED_LM_RESULTS.items():
         if vals["synth_cer"] is not None:
             status = _status_for(name, "synth_status")
             models.append((name, vals["synth_cer"], "#7f7f7f", status))
-    models.append(("TrOCR-small\n(unfinetuned)", 100.12, "#999999", None))
 
     labels = [m[0] for m in models]
     cers = [m[1] for m in models]
@@ -174,7 +174,7 @@ def chart_phase2_comparison():
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, fontsize=9, rotation=15, ha="right")
     ax.set_ylabel("Character Error Rate (%)", fontsize=11)
-    ax.set_title("Phase 2 comparison — CER on synthetic-freeform test set",
+    ax.set_title("Phase 2 comparison — CER on freeform trace",
                  fontsize=13, pad=12)
     ax.set_ylim(0, 160)
     ax.grid(axis="y", alpha=0.3, linestyle="--")
@@ -200,15 +200,15 @@ def chart_phase2_comparison():
 def chart_phase1_exact_match():
     """Bar chart: all models' exact-match on clean synthetic."""
     models = [
-        ("TrOCR-small\n(frozen enc)", 99.4,                                                                      "#a0d6a0"),
         ("TrOCR-small\n(unfrozen)",   phase2_data["models"]["trocr_small"].get("phase1_synth_exact_pct", 99.8), "#2ca02c"),
+        ("TrOCR-small\n(frozen enc)", 99.4,                                                                      "#a0d6a0"),
         ("PARSeq\n(fine-tuned)",      phase2_data["models"]["parseq"].get("phase1_synth_exact_pct", 72.2),       "#ff7f0e"),
         ("CNN+RNN\n(fine-tuned)",     phase2_data["models"]["cnn_rnn"].get("phase1_synth_exact_pct", 24.8),      "#d62728"),
+        ("TrOCR-small\n(unfinetuned)", 0.0,                                                                      "#999999"),
     ]
     for name, vals in EXTENDED_LM_RESULTS.items():
         if vals["synth_exact"] is not None:
             models.append((name, vals["synth_exact"], "#7f7f7f"))
-    models.append(("TrOCR-small\n(unfinetuned)", 0.0, "#999999"))
 
     labels = [m[0] for m in models]
     exacts = [m[1] for m in models]
@@ -256,7 +256,7 @@ def chart_phase2_exact_match():
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, fontsize=9, rotation=15, ha="right")
     ax.set_ylabel("Exact match rate (%)", fontsize=11)
-    ax.set_title("Phase 2 comparison — exact-match on synthetic-freeform test set",
+    ax.set_title("Phase 2 comparison — exact-match on freeform trace",
                  fontsize=13, pad=12)
     ax.set_ylim(0, 105)
     ax.grid(axis="y", alpha=0.3, linestyle="--")
@@ -279,15 +279,15 @@ def chart_phase1_dual():
 
     # Left: CER
     p1_models_cer = [
-        ("TrOCR-small\n(frozen enc)", 0.14,                                                              "#a0d6a0"),
         ("TrOCR-small\n(unfrozen)",   phase2_data["models"]["trocr_small"]["phase1_synth_cer_pct"],     "#2ca02c"),
+        ("TrOCR-small\n(frozen enc)", 0.14,                                                              "#a0d6a0"),
         ("PARSeq\n(fine-tuned)",      phase2_data["models"]["parseq"]["phase1_synth_cer_pct"],           "#ff7f0e"),
         ("CNN+RNN\n(fine-tuned)",     phase2_data["models"]["cnn_rnn"]["phase1_synth_cer_pct"],          "#d62728"),
+        ("TrOCR-small\n(unfinetuned)", 100.12,                                                           "#999999"),
     ]
     for name, vals in EXTENDED_LM_RESULTS.items():
         if vals["synth_cer"] is not None:
             p1_models_cer.append((name, vals["synth_cer"], "#7f7f7f"))
-    p1_models_cer.append(("TrOCR-small\n(unfinetuned)", 100.12, "#999999"))
 
     labels = [m[0] for m in p1_models_cer]
     cers = [m[1] for m in p1_models_cer]
@@ -309,15 +309,15 @@ def chart_phase1_dual():
 
     # Right: exact match
     p1_models_ex = [
-        ("TrOCR-small\n(frozen enc)", 99.4,                                                                      "#a0d6a0"),
         ("TrOCR-small\n(unfrozen)",   phase2_data["models"]["trocr_small"].get("phase1_synth_exact_pct", 99.8), "#2ca02c"),
+        ("TrOCR-small\n(frozen enc)", 99.4,                                                                      "#a0d6a0"),
         ("PARSeq\n(fine-tuned)",      phase2_data["models"]["parseq"].get("phase1_synth_exact_pct", 72.2),       "#ff7f0e"),
         ("CNN+RNN\n(fine-tuned)",     phase2_data["models"]["cnn_rnn"].get("phase1_synth_exact_pct", 24.8),      "#d62728"),
+        ("TrOCR-small\n(unfinetuned)", 0.0,                                                                      "#999999"),
     ]
     for name, vals in EXTENDED_LM_RESULTS.items():
         if vals["synth_exact"] is not None:
             p1_models_ex.append((name, vals["synth_exact"], "#7f7f7f"))
-    p1_models_ex.append(("TrOCR-small\n(unfinetuned)", 0.0, "#999999"))
 
     exacts = [m[1] for m in p1_models_ex]
     bars2 = ax2.bar(range(len(labels)), exacts, color=colors, edgecolor="black")
@@ -396,7 +396,7 @@ def chart_phase2_dual():
         ax2.text(bar.get_x() + bar.get_width() / 2, h + 1,
                  f"{ex:.1f}%", ha="center", va="bottom", fontsize=8)
 
-    fig.suptitle("Phase 2 comparison on 35-sample synthetic-freeform test set",
+    fig.suptitle("Phase 2 comparison on freeform trace",
                  fontsize=13, fontweight="bold", y=1.01)
     plt.tight_layout()
     out = FIGURES / "phase2_dual_metric.png"
