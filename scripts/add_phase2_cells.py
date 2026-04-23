@@ -339,6 +339,7 @@ model.load_state_dict(state)
 print('Loaded Phase 1 weights into model')
 
 p2_optimizer = torch.optim.AdamW(model.parameters(), lr=P2_LR, weight_decay=0.01)
+p2_scaler = torch.amp.GradScaler('cuda')
 p2_history = {'train_loss': [], 'val_cer': [], 'val_exact_match': []}
 p2_best_cer = float('inf')
 
@@ -352,28 +353,31 @@ for epoch in range(P2_EPOCHS):
     train_loss, n_batches = 0, 0
     for images, texts in tqdm(p2_train_loader, desc=f'  Epoch {epoch+1}/{P2_EPOCHS}', leave=False):
         images = images.to(device)
-        targets = model.tokenizer.encode(texts, device=device)
         p2_optimizer.zero_grad()
         with torch.amp.autocast('cuda'):
-            loss = model.forward_logits_loss(images, targets)[1]
+            # forward_logits_loss takes RAW texts (list of str), not encoded ids
+            logits, loss, _ = model.forward_logits_loss(images, texts)
         if not torch.isfinite(loss):
             continue
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-        p2_optimizer.step()
+        p2_scaler.scale(loss).backward()
+        p2_scaler.unscale_(p2_optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        p2_scaler.step(p2_optimizer)
+        p2_scaler.update()
         train_loss += loss.item()
         n_batches += 1
     avg_train_loss = train_loss / max(n_batches, 1)
 
-    # Val (character-level, space-stripped)
+    # Val (character-level, space-stripped) — decode via inference forward
     model.eval()
     refs, preds = [], []
     with torch.no_grad():
         for images, texts in p2_val_loader:
             images = images.to(device)
-            logits = model(images, max_length=MAX_LABEL_LEN)
-            decoded = model.tokenizer.decode(logits)
-            preds += [p[0] if isinstance(p, tuple) else p for p in decoded]
+            inf_logits = model.forward(images)
+            probs = inf_logits.softmax(-1)
+            batch_preds, _ = model.tokenizer.decode(probs)
+            preds += list(batch_preds)
             refs += list(texts)
     refs_ns = [r.replace(' ', '') for r in refs]
     preds_ns = [p.replace(' ', '') for p in preds]
@@ -407,9 +411,10 @@ refs, preds = [], []
 with torch.no_grad():
     for images, texts in p2_test_loader:
         images = images.to(device)
-        logits = model(images, max_length=MAX_LABEL_LEN)
-        decoded = model.tokenizer.decode(logits)
-        preds += [p[0] if isinstance(p, tuple) else p for p in decoded]
+        inf_logits = model.forward(images)
+        probs = inf_logits.softmax(-1)
+        batch_preds, _ = model.tokenizer.decode(probs)
+        preds += list(batch_preds)
         refs += list(texts)
 
 refs_ns = [r.replace(' ', '') for r in refs]
@@ -461,15 +466,82 @@ def append_cells(nb_path, cells):
         json.dump(nb, f, indent=1, ensure_ascii=False)
 
 
+CNN_RNN_PRE_P2_BASELINE = """# ============================================================
+# PRE-PHASE-2 BASELINE: Phase 1 model's performance on freeform test set
+# ============================================================
+# Load the Phase 1 best checkpoint (pre-fine-tune-on-freeform)
+p1_ckpt = f'{CHECKPOINT_DIR}/best_model.pt'
+model.load_state_dict(torch.load(p1_ckpt, map_location=device))
+model.eval()
+
+refs_pre, preds_pre = [], []
+with torch.no_grad():
+    for batch in p2_test_loader:
+        logits = model(batch['image'].to(device))
+        preds_pre += ctc_decode_greedy(logits.cpu(), idx_to_char, BLANK_IDX)
+        refs_pre += list(batch['text'])
+
+refs_ns_pre = [r.replace(' ', '') for r in refs_pre]
+preds_ns_pre = [p.replace(' ', '') for p in preds_pre]
+pre_p2_cer = compute_cer(preds_ns_pre, refs_ns_pre)
+pre_p2_exact = sum(1 for p, r in zip(preds_ns_pre, refs_ns_pre) if p == r) / max(len(refs_ns_pre), 1)
+
+print(f'\\n{"="*70}')
+print(f'CNN+RNN PRE-PHASE-2 BASELINE on synth-freeform TEST ({len(refs_pre)} samples)')
+print(f'{"="*70}')
+print(f'  Character-level CER: {pre_p2_cer*100:.2f}%')
+print(f'  Exact match:         {pre_p2_exact*100:.1f}%')
+print(f'{"="*70}')
+print('This is the Phase 1 model evaluated on freeform — i.e., what CER')
+print('would be WITHOUT Phase 2 fine-tuning. Phase 2 training in the next')
+print('cell should improve on this number.')
+"""
+
+PARSEQ_PRE_P2_BASELINE = """# ============================================================
+# PRE-PHASE-2 BASELINE: Phase 1 model's performance on freeform test set
+# ============================================================
+p1_ckpt = f'{CHECKPOINT_DIR}/best_model.pt'
+model.load_state_dict(torch.load(p1_ckpt, map_location=device))
+model.eval()
+
+refs_pre, preds_pre = [], []
+with torch.no_grad():
+    for images, texts in p2_test_loader:
+        images = images.to(device)
+        inf_logits = model.forward(images)
+        probs = inf_logits.softmax(-1)
+        batch_preds, _ = model.tokenizer.decode(probs)
+        preds_pre += list(batch_preds)
+        refs_pre += list(texts)
+
+refs_ns_pre = [r.replace(' ', '') for r in refs_pre]
+preds_ns_pre = [p.replace(' ', '') for p in preds_pre]
+pre_p2_cer = compute_cer(preds_ns_pre, refs_ns_pre)
+pre_p2_exact = sum(1 for p, r in zip(preds_ns_pre, refs_ns_pre) if p == r) / max(len(refs_ns_pre), 1)
+
+print(f'\\n{"="*70}')
+print(f'PARSeq PRE-PHASE-2 BASELINE on synth-freeform TEST ({len(refs_pre)} samples)')
+print(f'{"="*70}')
+print(f'  Character-level CER: {pre_p2_cer*100:.2f}%')
+print(f'  Exact match:         {pre_p2_exact*100:.1f}%')
+print(f'{"="*70}')
+print('This is the Phase 1 model evaluated on freeform — i.e., what CER')
+print('would be WITHOUT Phase 2 fine-tuning. Phase 2 training in the next')
+print('cell should improve on this number.')
+"""
+
+
 cnn_rnn_cells = [
     make_markdown_cell(CNN_RNN_PHASE2_MD),
     make_code_cell(CNN_RNN_PHASE2_SETUP),
+    make_code_cell(CNN_RNN_PRE_P2_BASELINE),
     make_code_cell(CNN_RNN_PHASE2_TRAIN),
     make_code_cell(CNN_RNN_PHASE2_EVAL),
 ]
 parseq_cells = [
     make_markdown_cell(PARSEQ_PHASE2_MD),
     make_code_cell(PARSEQ_PHASE2_SETUP),
+    make_code_cell(PARSEQ_PRE_P2_BASELINE),
     make_code_cell(PARSEQ_PHASE2_TRAIN),
     make_code_cell(PARSEQ_PHASE2_EVAL),
 ]
