@@ -90,9 +90,10 @@ def _status_for(model_name, split_key):
 def chart_phase1_comparison():
     """Bar chart: all models' CER on clean synthetic."""
     models = [
-        ("TrOCR-small\n(fine-tuned)", phase2_data["models"]["trocr_small"]["phase1_synth_cer_pct"], "#2ca02c", None),
-        ("PARSeq\n(fine-tuned)",      phase2_data["models"]["parseq"]["phase1_synth_cer_pct"],       "#ff7f0e", None),
-        ("CNN+RNN\n(fine-tuned)",     phase2_data["models"]["cnn_rnn"]["phase1_synth_cer_pct"],      "#d62728", None),
+        ("TrOCR-small\n(frozen enc)",   0.14,                                                            "#a0d6a0", None),
+        ("TrOCR-small\n(unfrozen)",     phase2_data["models"]["trocr_small"]["phase1_synth_cer_pct"],   "#2ca02c", None),
+        ("PARSeq\n(fine-tuned)",        phase2_data["models"]["parseq"]["phase1_synth_cer_pct"],        "#ff7f0e", None),
+        ("CNN+RNN\n(fine-tuned)",       phase2_data["models"]["cnn_rnn"]["phase1_synth_cer_pct"],       "#d62728", None),
     ]
     for name, vals in EXTENDED_LM_RESULTS.items():
         if vals["synth_cer"] is not None:
@@ -199,7 +200,8 @@ def chart_phase2_comparison():
 def chart_phase1_exact_match():
     """Bar chart: all models' exact-match on clean synthetic."""
     models = [
-        ("TrOCR-small\n(fine-tuned)", phase2_data["models"]["trocr_small"].get("phase1_synth_exact_pct", 99.8), "#2ca02c"),
+        ("TrOCR-small\n(frozen enc)", 99.4,                                                                      "#a0d6a0"),
+        ("TrOCR-small\n(unfrozen)",   phase2_data["models"]["trocr_small"].get("phase1_synth_exact_pct", 99.8), "#2ca02c"),
         ("PARSeq\n(fine-tuned)",      phase2_data["models"]["parseq"].get("phase1_synth_exact_pct", 72.2),       "#ff7f0e"),
         ("CNN+RNN\n(fine-tuned)",     phase2_data["models"]["cnn_rnn"].get("phase1_synth_exact_pct", 24.8),      "#d62728"),
     ]
@@ -277,9 +279,10 @@ def chart_phase1_dual():
 
     # Left: CER
     p1_models_cer = [
-        ("TrOCR-small\n(fine-tuned)", phase2_data["models"]["trocr_small"]["phase1_synth_cer_pct"], "#2ca02c"),
-        ("PARSeq\n(fine-tuned)",      phase2_data["models"]["parseq"]["phase1_synth_cer_pct"],       "#ff7f0e"),
-        ("CNN+RNN\n(fine-tuned)",     phase2_data["models"]["cnn_rnn"]["phase1_synth_cer_pct"],      "#d62728"),
+        ("TrOCR-small\n(frozen enc)", 0.14,                                                              "#a0d6a0"),
+        ("TrOCR-small\n(unfrozen)",   phase2_data["models"]["trocr_small"]["phase1_synth_cer_pct"],     "#2ca02c"),
+        ("PARSeq\n(fine-tuned)",      phase2_data["models"]["parseq"]["phase1_synth_cer_pct"],           "#ff7f0e"),
+        ("CNN+RNN\n(fine-tuned)",     phase2_data["models"]["cnn_rnn"]["phase1_synth_cer_pct"],          "#d62728"),
     ]
     for name, vals in EXTENDED_LM_RESULTS.items():
         if vals["synth_cer"] is not None:
@@ -306,7 +309,8 @@ def chart_phase1_dual():
 
     # Right: exact match
     p1_models_ex = [
-        ("TrOCR-small\n(fine-tuned)", phase2_data["models"]["trocr_small"].get("phase1_synth_exact_pct", 99.8), "#2ca02c"),
+        ("TrOCR-small\n(frozen enc)", 99.4,                                                                      "#a0d6a0"),
+        ("TrOCR-small\n(unfrozen)",   phase2_data["models"]["trocr_small"].get("phase1_synth_exact_pct", 99.8), "#2ca02c"),
         ("PARSeq\n(fine-tuned)",      phase2_data["models"]["parseq"].get("phase1_synth_exact_pct", 72.2),       "#ff7f0e"),
         ("CNN+RNN\n(fine-tuned)",     phase2_data["models"]["cnn_rnn"].get("phase1_synth_exact_pct", 24.8),      "#d62728"),
     ]
