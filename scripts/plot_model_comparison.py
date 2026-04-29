@@ -144,6 +144,7 @@ all_models = {
     "TrOCR-small\nunfrozen":      0.06,
     "TrOCR-small\nfrozen":        0.14,
     "PARSeq":                     8.96,
+    "TrOCR-base":                44.25,
     "CNN+RNN\n(CTC)":             66.82,
     "TrOCR-small\nUNTRAINED":   100.12,
     "GPT-4o\n(few-shot)":       102.71,
@@ -152,7 +153,9 @@ all_models = {
 }
 
 model_colors = [
-    colors["unfrozen"], colors["frozen"], colors["parseq"], colors["cnn_rnn"],
+    colors["unfrozen"], colors["frozen"], colors["parseq"],
+    "#03A9F4",  # TrOCR-base — distinct blue
+    colors["cnn_rnn"],
     "#BDBDBD", colors["large"], colors["large"], colors["large"],
 ]
 
@@ -186,6 +189,7 @@ fig, ax = plt.subplots(figsize=(12, 5))
 # Large models: few-shot freeform eval from docs/extended_large_model_results.json.
 phase2_models = {
     "TrOCR-small\n(phase 2)":     1.34,
+    "TrOCR-base\n(phase 2)":      8.24,
     "PARSeq\n(phase 2)":         29.17,
     "CNN+RNN\n(phase 2)":        67.24,
     "GPT-4o\n(few-shot)":       141.57,
@@ -194,7 +198,7 @@ phase2_models = {
 }
 
 phase2_colors = [
-    colors["unfrozen"], colors["parseq"], colors["cnn_rnn"],
+    colors["unfrozen"], "#03A9F4", colors["parseq"], colors["cnn_rnn"],
     colors["large"], colors["large"], colors["large"],
 ]
 

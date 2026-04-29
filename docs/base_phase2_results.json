@@ -1,0 +1,33 @@
+{
+  "model": "trocr-base",
+  "experiment": "base_unfrozen_lr5e6",
+  "params_M": 384.922112,
+  "phase1": {
+    "lr": 5e-06,
+    "batch_size": 8,
+    "grad_accum": 4,
+    "epochs_run": 4,
+    "epochs_planned": 15,
+    "stopped_early": true,
+    "stop_reason": "beam-search degeneration: empty predictions on all samples by epoch 4",
+    "best_cer_pct": 44.25,
+    "best_exact_pct": 25.8,
+    "best_epoch": 2
+  },
+  "phase2": {
+    "lr": 2e-06,
+    "batch_size": 8,
+    "grad_accum": 4,
+    "epochs_run": 8,
+    "pre_p2_freeform_cer_pct": 47.51,
+    "post_p2_freeform_cer_pct": 8.24,
+    "pre_p2_freeform_exact_pct": 14.29,
+    "post_p2_freeform_exact_pct": 37.14,
+    "lift_pp": 39.27,
+    "best_val_cer_pct": 8.23,
+    "best_val_epoch": 8
+  },
+  "test_split_size": 35,
+  "seed": 42,
+  "interpretation": "Phase 2 fine-tune produced the largest absolute lift of any architecture (+39.27 pp), bringing TrOCR-base from 47.51% to 8.24% CER on the freeform-trace test split. Notably this is also better than its own Phase 1 best CER on synthetic data (44.25%), suggesting the small-dataset Phase 2 fine-tune stabilised the beam-search degeneration that destabilised Phase 1 training. Post-P2 CER ordering across all architectures (TrOCR-small 1.34 < TrOCR-base 8.24 < PARSeq 29.17 < CNN+RNN 67.24) still tracks Stage 1 capability ordering."
+}

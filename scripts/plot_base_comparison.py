@@ -153,9 +153,9 @@ print(f"Saved: {output_dir / 'base_vs_small_val_loss.png'}")
 # Phase 1 = trained on 200k clean synthetic. Source: docs/phase2_comparison.json
 fig, ax = plt.subplots(figsize=(10, 5))
 
-size_models_p1 = ["CNN+RNN\n(12.5M)", "PARSeq\n(23.8M)", "TrOCR-small\n(61.6M)"]
-size_cer_p1 = [66.82, 8.96, 0.06]
-size_bar_colors = [colors["cnn_rnn"], "#4CAF50", colors["small"]]
+size_models_p1 = ["CNN+RNN\n(12.5M)", "PARSeq\n(23.8M)", "TrOCR-small\n(61.6M)", "TrOCR-base\n(385M)"]
+size_cer_p1 = [66.82, 8.96, 0.06, 44.25]
+size_bar_colors = [colors["cnn_rnn"], "#4CAF50", colors["small"], "#03A9F4"]
 
 bars = ax.bar(size_models_p1, size_cer_p1, color=size_bar_colors,
               edgecolor="white", linewidth=0.5)
@@ -181,8 +181,8 @@ print(f"Saved: {output_dir / 'model_size_cer_bar.png'}")
 # After curriculum fine-tune on 350 synthetic-freeform samples.
 fig, ax = plt.subplots(figsize=(10, 5))
 
-size_models_p2 = ["CNN+RNN\n(12.5M)", "PARSeq\n(23.8M)", "TrOCR-small\n(61.6M)"]
-size_cer_p2 = [67.24, 29.17, 1.34]
+size_models_p2 = ["CNN+RNN\n(12.5M)", "PARSeq\n(23.8M)", "TrOCR-small\n(61.6M)", "TrOCR-base\n(385M)"]
+size_cer_p2 = [67.24, 29.17, 1.34, 8.24]
 
 bars = ax.bar(size_models_p2, size_cer_p2, color=size_bar_colors,
               edgecolor="white", linewidth=0.5)

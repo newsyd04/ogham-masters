@@ -7,6 +7,7 @@ All three OCR architectures were Phase-1 fine-tuned on 200k synthetic Ogham insc
 | Model | Architecture | Phase 1 synth CER | Pre-P2 freeform CER | Post-P2 freeform CER | Lift (pp) |
 |---|---|---|---|---|---|
 | **TrOCR-small** | Attention (TrOCR encoder + RoBERTa decoder) | 0.06% | 14.34% | **1.34%** | ↓ 13.0 |
+| **TrOCR-base** | Attention (TrOCR-base encoder + RoBERTa decoder) | 44.25% | 47.51% | **8.24%** | ↓ 39.3 |
 | **PARSeq** | Attention (ViT + Permutation-LM decoder) | 8.96% | 37.90% | **29.17%** | ↓ 8.7 |
 | **CNN+RNN** | CTC (ResNet-18 + BiLSTM) | 66.82% | 68.58% | **67.24%** | ↓ 1.3 |
 

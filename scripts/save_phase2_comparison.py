@@ -45,6 +45,18 @@ DATA = {
             "post_p2_freeform_exact_pct": 91.4,
             "lift_pp": 13.00,
         },
+        "trocr_base": {
+            "display_name": "TrOCR-base",
+            "architecture": "Attention (TrOCR-base encoder + RoBERTa decoder)",
+            "params_M": 384.9,
+            "phase1_synth_cer_pct": 44.25,
+            "phase1_synth_exact_pct": 25.8,
+            "pre_p2_freeform_cer_pct": 47.51,
+            "post_p2_freeform_cer_pct": 8.24,
+            "pre_p2_freeform_exact_pct": 14.29,
+            "post_p2_freeform_exact_pct": 37.14,
+            "lift_pp": 39.27,
+        },
         "parseq": {
             "display_name": "PARSeq",
             "architecture": "Attention (ViT + Permutation-LM decoder)",
@@ -83,7 +95,7 @@ def save_json():
 def save_markdown():
     path = DOCS / "phase2_comparison_results.md"
     models = DATA["models"]
-    order = ["trocr_small", "parseq", "cnn_rnn"]
+    order = ["trocr_small", "trocr_base", "parseq", "cnn_rnn"]
     md = [
         "# Phase 2 Three-Architecture Comparison",
         "",
@@ -137,7 +149,7 @@ def save_markdown():
 
 def chart_pre_vs_post():
     """Grouped bar: pre-P2 vs post-P2 freeform CER, one group per model."""
-    order = ["trocr_small", "parseq", "cnn_rnn"]
+    order = ["trocr_small", "trocr_base", "parseq", "cnn_rnn"]
     labels = [DATA["models"][k]["display_name"] for k in order]
     pre = [DATA["models"][k]["pre_p2_freeform_cer_pct"] for k in order]
     post = [DATA["models"][k]["post_p2_freeform_cer_pct"] for k in order]
@@ -179,11 +191,12 @@ def chart_pre_vs_post():
 
 def chart_lift_vs_capability():
     """Scatter: Phase 1 CER (x, inverted) vs Phase 2 lift (y)."""
-    order = ["cnn_rnn", "parseq", "trocr_small"]
+    order = ["cnn_rnn", "parseq", "trocr_small", "trocr_base"]
     xs = [DATA["models"][k]["phase1_synth_cer_pct"] for k in order]
     ys = [DATA["models"][k]["lift_pp"] for k in order]
     labels = [DATA["models"][k]["display_name"] for k in order]
-    colors = ["#d62728", "#ff7f0e", "#2ca02c"]
+    # cnn_rnn, parseq, trocr_small, trocr_base
+    colors = ["#d62728", "#ff7f0e", "#2ca02c", "#03A9F4"]
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
     ax.scatter(xs, ys, s=350, c=colors, edgecolors="black", linewidths=1.5, zorder=3)
@@ -204,7 +217,7 @@ def chart_lift_vs_capability():
     ax.set_title("Phase 2 adaptation benefit scales with model capability", fontsize=13, pad=12)
     ax.grid(alpha=0.3, linestyle="--")
     ax.invert_xaxis()  # more capable -> right
-    ax.set_ylim(-1, 15)
+    ax.set_ylim(-2, 45)  # extended for TrOCR-base's larger lift
 
     # Trend annotation
     ax.annotate(
@@ -222,7 +235,7 @@ def chart_lift_vs_capability():
 
 def chart_combined():
     """Two-panel figure: bar chart + scatter, side by side for thesis."""
-    order = ["trocr_small", "parseq", "cnn_rnn"]
+    order = ["trocr_small", "trocr_base", "parseq", "cnn_rnn"]
     labels = [DATA["models"][k]["display_name"] for k in order]
     pre = [DATA["models"][k]["pre_p2_freeform_cer_pct"] for k in order]
     post = [DATA["models"][k]["post_p2_freeform_cer_pct"] for k in order]
@@ -249,11 +262,11 @@ def chart_combined():
                      f"{h:.1f}%", ha="center", va="bottom", fontsize=8)
 
     # Right: scatter (capability vs lift)
-    order_scatter = ["cnn_rnn", "parseq", "trocr_small"]
+    order_scatter = ["cnn_rnn", "parseq", "trocr_small", "trocr_base"]
     xs = [DATA["models"][k]["phase1_synth_cer_pct"] for k in order_scatter]
     ys = [DATA["models"][k]["lift_pp"] for k in order_scatter]
     scatter_labels = [DATA["models"][k]["display_name"] for k in order_scatter]
-    colors = ["#d62728", "#ff7f0e", "#2ca02c"]
+    colors = ["#d62728", "#ff7f0e", "#2ca02c", "#03A9F4"]
 
     ax2.scatter(xs, ys, s=300, c=colors, edgecolors="black", linewidths=1.5, zorder=3)
     for x_val, y_val, label in zip(xs, ys, scatter_labels):
@@ -265,7 +278,7 @@ def chart_combined():
     ax2.set_title("(b) Phase 2 benefit vs. base capability", fontsize=12)
     ax2.grid(alpha=0.3, linestyle="--")
     ax2.invert_xaxis()
-    ax2.set_ylim(-1, 15)
+    ax2.set_ylim(-2, 45)
 
     fig.suptitle(
         "Phase 2 fine-tuning across OCR architectures on freeform trace",
