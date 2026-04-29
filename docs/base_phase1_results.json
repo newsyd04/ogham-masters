@@ -1,0 +1,108 @@
+{
+  "model": "trocr-base",
+  "experiment": "base_unfrozen_lr5e6",
+  "params_M": 384.9,
+  "phase1": {
+    "lr": 5e-6,
+    "batch_size": 8,
+    "grad_accum": 4,
+    "effective_batch_size": 32,
+    "epochs_planned": 15,
+    "epochs_run": 4,
+    "stopped_early": true,
+    "stop_reason": "beam-search degeneration: empty predictions on all samples by epoch 4",
+    "best_cer_pct": 44.25,
+    "best_exact_pct": 25.8,
+    "best_epoch": 2,
+    "checkpoint_path": "checkpoints/base_unfrozen_lr5e6/base_unfrozen_lr5e6/best_ogham",
+    "trajectory": [
+      {
+        "epoch": 1,
+        "train_loss": 0.7850,
+        "val_loss": 0.4061,
+        "val_cer_pct": 98.53,
+        "val_exact_pct": 13.4,
+        "sample_predictions": {
+          "ref_short": "ᚐᚌᚊᚊ",
+          "pred_short": "ᚐᚌᚊᚊ",
+          "ref_long": "ᚋᚐᚊᚔᚈᚈᚐᚄ ᚋᚐᚊᚔ ᚋᚒᚉᚑᚔ ᚉᚑᚏᚁᚁᚔ",
+          "pred_long_truncated": "ᚋᚐᚐᚐᚐᚐᚐᚐᚐᚊᚔᚔᚔᚔᚔᚔᚈ...",
+          "pattern": "character spam on long sequences, correct on short"
+        }
+      },
+      {
+        "epoch": 2,
+        "train_loss": 0.0758,
+        "val_loss": 0.6081,
+        "val_cer_pct": 44.25,
+        "val_exact_pct": 25.8,
+        "sample_predictions": {
+          "ref_short": "ᚐᚌᚊᚊ",
+          "pred_short": "ᚐᚌᚊᚊ",
+          "ref_long": "ᚋᚐᚊᚔᚈᚈᚐᚄ ᚋᚐᚊᚔ ᚋᚒᚉᚑᚔ ᚉᚑᚏᚁᚁᚔ",
+          "pred_long": "",
+          "ref_medium": "ᚔᚌᚐᚉᚁᚆᚐᚋᚁᚐᚔᚑᚉ",
+          "pred_medium": "ᚔᚌᚐᚉᚁᚆᚆᚐᚋᚁᚐᚔᚑᚉ",
+          "pattern": "best epoch — short and medium nearly correct, long collapsed to empty"
+        },
+        "is_best": true
+      },
+      {
+        "epoch": 3,
+        "train_loss": 0.0495,
+        "val_loss": 0.5390,
+        "val_cer_pct": 106.95,
+        "val_exact_pct": 4.2,
+        "sample_predictions": {
+          "ref_short": "ᚐᚌᚊᚊ",
+          "pred_short": "ᚐᚌᚊᚊᚊ",
+          "ref_long": "ᚋᚐᚊᚔᚈᚈᚐᚄ ᚋᚐᚊᚔ ᚋᚒᚉᚑᚔ ᚉᚑᚏᚁᚁᚔ",
+          "pred_long": "",
+          "ref_medium": "ᚔᚌᚐᚉᚁᚆᚐᚋᚁᚐᚔᚑᚉ",
+          "pred_medium": "ᚔᚌᚔᚌᚔᚌᚔᚌᚔᚌᚔᚌᚔᚌᚔ",
+          "pattern": "repetition collapse — model emitting cyclic ᚔᚌ pattern"
+        }
+      },
+      {
+        "epoch": 4,
+        "train_loss": 0.0379,
+        "val_loss": 0.4415,
+        "val_cer_pct": 100.74,
+        "val_exact_pct": 0.7,
+        "sample_predictions": {
+          "ref_short": "ᚐᚌᚊᚊ",
+          "pred_short": "",
+          "ref_long": "ᚋᚐᚊᚔᚈᚈᚐᚄ ᚋᚐᚊᚔ ᚋᚒᚉᚑᚔ ᚉᚑᚏᚁᚁᚔ",
+          "pred_long": "",
+          "ref_medium": "ᚔᚌᚐᚉᚁᚆᚐᚋᚁᚐᚔᚑᚉ",
+          "pred_medium": "",
+          "pattern": "complete generation collapse — empty predictions on all samples"
+        }
+      }
+    ],
+    "failure_mode_summary": "Beam-search degeneration consistent with exposure bias. Train and val loss continued to fall through epoch 4 (0.785 to 0.038 train, 0.406 to 0.442 val), but greedy/beam generation quality collapsed: epoch 2 was nearly correct on short and medium inputs, epoch 3 produced cyclic repetitions, and epoch 4 produced empty strings on all sampled inputs. The teacher-forced loss signal continued rewarding sharper LM-head distributions while autoregressive decoding found degenerate high-probability paths.",
+    "interpretation": "TrOCR-base (385M params) does not productively transfer to this corpus under the tested optimisation regime. The 6x parameter scale-up over TrOCR-small reached an order of magnitude worse best CER (44.25% vs 0.06%) and could not be trained stably past epoch 2. Whether stricter regularisation (label smoothing, scheduled sampling, mixed teacher-forced training) could stabilise base-scale models is left to future work."
+  },
+  "previous_attempts": [
+    {
+      "config": "LR 5e-5 (small-model HPs), batch 16",
+      "outcome": "diverged within first 3 epochs, CER climbed to 99-110%"
+    },
+    {
+      "config": "LR 1e-5, batch 8, grad accum 4, 10 epochs",
+      "outcome": "loss decreased but generation barely started — CER 99.54% at epoch 1 with empty predictions; insufficient learning rate for productive convergence in available epochs"
+    },
+    {
+      "config": "LR 5e-6, batch 8, grad accum 4, 15 epochs (this run)",
+      "outcome": "best result at epoch 2: CER 44.25%, exact 25.8%; degenerated to empty predictions by epoch 4"
+    }
+  ],
+  "comparison_to_trocr_small": {
+    "trocr_small_best_cer_pct": 0.06,
+    "trocr_small_best_exact_pct": 99.8,
+    "trocr_base_best_cer_pct": 44.25,
+    "trocr_base_best_exact_pct": 25.8,
+    "cer_gap_orders_of_magnitude": 2.87,
+    "headline": "TrOCR-base reached 44.25% CER vs TrOCR-small's 0.06%, a gap of nearly three orders of magnitude. Scaling up parameters did not improve recognition on this Ogham corpus."
+  }
+}
